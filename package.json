@@ -1,0 +1,14 @@
+{
+  "name": "agrofiber-erp",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w frontend",
+    "dev:backend": "npm run dev -w backend",
+    "build": "npm run build -w frontend",
+    "start:backend": "npm run start -w backend"
+  }
+}

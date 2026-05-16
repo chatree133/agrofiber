@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #f5f8fb;
+  color: #374151;
+}
+
+.ant-menu-dark .ant-menu-item-selected {
+  background: #1f86f6;
+}
+
+.ant-dropdown-menu {
+  padding: 0;
+}
