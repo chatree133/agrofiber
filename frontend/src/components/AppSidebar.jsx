@@ -1,9 +1,10 @@
 import { LogoutOutlined, StarFilled, StarOutlined } from '@ant-design/icons';
 import { Avatar, Button, Layout, Menu, Tooltip } from 'antd';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { appMenus, flattenMenus } from '../data/menuItems.jsx';
+import defaultUserAvatar from '../assets/default-user.svg';
 
 const { Sider } = Layout;
 
@@ -19,6 +20,17 @@ export function AppSidebarContent({ collapsed = false, onNavigate }) {
   const [openKeys, setOpenKeys] = useState(['/favorite']);
   const favoriteMenus = user.favoriteMenus || [];
   const allMenus = flattenMenus(appMenus);
+  const fallbackAvatar = defaultUserAvatar;
+  const [avatarSrc, setAvatarSrc] = useState(user?.avatarUrl || fallbackAvatar);
+
+  useEffect(() => {
+    setAvatarSrc(user?.avatarUrl || fallbackAvatar);
+  }, [user?.avatarUrl, fallbackAvatar]);
+
+  const handleAvatarError = () => {
+    setAvatarSrc(fallbackAvatar);
+    return false;
+  };
 
   const items = useMemo(() => {
     const favorites = favoriteMenus
@@ -30,6 +42,7 @@ export function AppSidebarContent({ collapsed = false, onNavigate }) {
       }));
 
     return appMenus
+      .filter(item => !item.hiddenInMenu)
       .filter((item) => isAllowed(item, user.roles || []))
       .map((item) => {
         const children =
@@ -91,7 +104,12 @@ export function AppSidebarContent({ collapsed = false, onNavigate }) {
       </div>
 
       <div className="flex flex-col items-center gap-3 border-b border-white/15 py-3">
-        <Avatar src={user.avatarUrl} size={64} className="border-2 border-sky-300" />
+        <Avatar
+          src={avatarSrc}
+          size={64}
+          className="border-2 border-sky-300"
+          onError={handleAvatarError}
+        />
         {!collapsed && <div className="text-center text-base">{user.name}</div>}
       </div>
 

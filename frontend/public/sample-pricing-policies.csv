@@ -1,0 +1,4 @@
+﻿salesSku,pricingMethodId,standardPrice,standardCost,minMarginPercent,targetMarginPercent,minMarkupPercent,targetMarkupPercent,currencyCode,effectiveFrom,effectiveTo,priority,remark,isActive
+MDF-9M-1220-2440-LIGHTTEAK-A,1,1200,900,,,,,THB,2026-06-01,2026-12-31,10,โปรโมชั่นครึ่งปี,TRUE
+MDF-9M-1220-2440-MF-WALNUT-A,3,900,700,5,10,,,THB,2026-07-01,2026-09-30,5,Cost-plus ตัวอย่าง,TRUE
+,,,,,,,,,,,,,

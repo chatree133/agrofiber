@@ -1,18 +1,36 @@
 import { Avatar, Badge, Button, Dropdown } from 'antd';
+import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { findMenuPath, navMenus } from '../data/menuItems.jsx';
+import defaultUserAvatar from '../assets/default-user.svg';
 
 export default function TopNav({ collapsed, onToggle }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout } = useAuth();
-  const breadcrumb = findMenuPath(location.pathname);
+  const breadcrumb = findMenuPath("/" + location.pathname.split("/").filter(Boolean).slice(0, 2).join("/"));
+  const fallbackAvatar = defaultUserAvatar;
+  const [avatarSrc, setAvatarSrc] = useState(user?.avatarUrl || fallbackAvatar);
+
+  useEffect(() => {
+    setAvatarSrc(user?.avatarUrl || fallbackAvatar);
+  }, [user?.avatarUrl, fallbackAvatar]);
+
+  const handleAvatarError = () => {
+    setAvatarSrc(fallbackAvatar);
+    return false;
+  };
 
   const overlay = (
     <div className="w-72 overflow-hidden rounded-md bg-white shadow-xl">
       <div className="flex flex-col items-center gap-3 bg-brand p-6 text-white">
-        <Avatar src={user.avatarUrl} size={72} className="border-4 border-sky-200" />
+        <Avatar
+          src={avatarSrc}
+          size={72}
+          className="border-4 border-sky-200"
+          onError={handleAvatarError}
+        />
         <div className="text-lg font-semibold">{user.name}</div>
       </div>
       <div className="p-3">
@@ -103,7 +121,7 @@ export default function TopNav({ collapsed, onToggle }) {
 
       <Dropdown dropdownRender={() => overlay} trigger={['click']} placement="bottomRight">
         <button type="button" className="ml-auto rounded-full border-2 border-sky-400 p-1 shadow-md lg:ml-3">
-          <Avatar src={user.avatarUrl} size={46} />
+          <Avatar src={avatarSrc} size={46} onError={handleAvatarError} />
         </button>
       </Dropdown>
     </header>

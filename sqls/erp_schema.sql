@@ -17,6 +17,7 @@ CREATE TABLE dbo.Users (
     StaffId NVARCHAR(100) NOT NULL UNIQUE,
     PasswordHash NVARCHAR(255) NOT NULL,
     DisplayName NVARCHAR(200) NOT NULL,
+    JobTitle NVARCHAR(100) NULL,
     Email NVARCHAR(255) NULL,
     AvatarUrl NVARCHAR(500) NULL,
     IsActive BIT NOT NULL DEFAULT 1,
@@ -110,6 +111,14 @@ CREATE TABLE dbo.TaxCodes (
     IsActive BIT NOT NULL DEFAULT 1
 );
 
+CREATE TABLE dbo.PaymentTerms (
+    PaymentTermId INT IDENTITY(1,1) PRIMARY KEY,
+    PaymentTermCode NVARCHAR(50) NOT NULL UNIQUE,
+    PaymentTermName NVARCHAR(255) NOT NULL,
+    Days INT NOT NULL DEFAULT 0,
+    IsActive BIT NOT NULL DEFAULT 1
+);
+
 CREATE TABLE dbo.PricingMethods (
     PricingMethodId INT IDENTITY(1,1) PRIMARY KEY,
     PricingMethodCode NVARCHAR(30) NOT NULL UNIQUE,
@@ -118,45 +127,103 @@ CREATE TABLE dbo.PricingMethods (
     IsActive BIT NOT NULL DEFAULT 1
 );
 
+CREATE TABLE dbo.CustomerSegments (
+    CustomerSegmentId INT IDENTITY(1,1) PRIMARY KEY,
+    SegmentCode NVARCHAR(30) NOT NULL UNIQUE,
+    SegmentName NVARCHAR(100) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    IsActive BIT NOT NULL DEFAULT 1
+);
+
+CREATE TABLE dbo.CustomerPriceGroups (
+    CustomerPriceGroupId INT IDENTITY(1,1) PRIMARY KEY,
+    PriceGroupCode NVARCHAR(50) NOT NULL UNIQUE,
+    PriceGroupName NVARCHAR(255) NOT NULL,
+    IsActive BIT NOT NULL DEFAULT 1
+);
+
 CREATE TABLE dbo.PriceLists (
     PriceListId INT IDENTITY(1,1) PRIMARY KEY,
     PriceListCode NVARCHAR(50) NOT NULL UNIQUE,
     PriceListName NVARCHAR(255) NOT NULL,
-    CustomerSegment NVARCHAR(80) NULL,
+    CustomerSegmentId INT NULL,
     CurrencyCode CHAR(3) NOT NULL DEFAULT 'THB',
     IsActive BIT NOT NULL DEFAULT 1,
-    CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+    Priority INT NOT NULL DEFAULT 0,
+    CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CustomerPriceGroupId INT NULL,
+    CONSTRAINT FK_PriceLists_CustomerSegments FOREIGN KEY (CustomerSegmentId) REFERENCES dbo.CustomerSegments(CustomerSegmentId),
+    CONSTRAINT FK_PriceLists_CustomerPriceGroups FOREIGN KEY (CustomerPriceGroupId) REFERENCES dbo.CustomerPriceGroups(CustomerPriceGroupId)
 );
 
 CREATE TABLE dbo.DiscountRules (
     DiscountRuleId INT IDENTITY(1,1) PRIMARY KEY,
     DiscountRuleCode NVARCHAR(50) NOT NULL UNIQUE,
     DiscountRuleName NVARCHAR(255) NOT NULL,
-    DiscountType NVARCHAR(30) NOT NULL DEFAULT 'percent',
+    DiscountType NVARCHAR(30) NOT NULL DEFAULT 'PERCENT',
     DiscountPercent DECIMAL(9,4) NULL,
     DiscountAmount DECIMAL(18,4) NULL,
+    Priority INT NOT NULL DEFAULT 0,
     IsActive BIT NOT NULL DEFAULT 1,
-    CONSTRAINT CK_DiscountRules_Type CHECK (DiscountType IN ('percent', 'amount'))
+    ApplyLevel NVARCHAR(20) NOT NULL DEFAULT 'LINE',
+    CanCombine BIT NOT NULL DEFAULT 1,
+    StopProcessing BIT NOT NULL DEFAULT 0,
+    MinOrderAmount DECIMAL(18,4) NULL,
+    MaxOrderAmount DECIMAL(18,4) NULL,
+    PricingSequenceId INT NULL,
+    Description NVARCHAR(500) NULL,
+    ItemId INT NULL,
+    CustomerId INT NULL,
+    EffectiveFrom DATE NOT NULL DEFAULT (CAST(SYSUTCDATETIME() AS DATE)),
+    EffectiveTo DATE NULL,
+    CONSTRAINT CK_DiscountRules_Level CHECK (ApplyLevel IN ('LINE', 'ORDER')),
+    CONSTRAINT CK_DiscountRules_Type CHECK (DiscountType IN ('PERCENT', 'AMOUNT')),
+    CONSTRAINT CK_DiscountRules_Amount CHECK (MaxOrderAmount IS NULL OR MinOrderAmount IS NULL OR MaxOrderAmount >= MinOrderAmount),
+    CONSTRAINT FK_DiscountRules_PricingSequences FOREIGN KEY (PricingSequenceId) REFERENCES dbo.PricingSequences(PricingSequenceId)
 );
+
+CREATE TABLE dbo.PricingSequences (
+    PricingSequenceId INT IDENTITY(1,1) PRIMARY KEY,
+    SequenceCode NVARCHAR(50) NOT NULL UNIQUE,
+    SequenceName NVARCHAR(255) NOT NULL,
+    ExecutionOrder INT NOT NULL,
+    IsActive BIT NOT NULL DEFAULT 1
+);
+
+INSERT INTO dbo.PricingSequences
+(
+    SequenceCode,
+    SequenceName,
+    ExecutionOrder
+)
+VALUES
+('BASE_PRICE', 'Base Price', 10),
+('CONTRACT_PRICE', 'Customer Contract', 20),
+('LINE_DISCOUNT', 'Line Discount', 30),
+('ORDER_DISCOUNT', 'Order Discount', 40),
+('PROMOTION', 'Promotion', 50);
 
 CREATE TABLE dbo.Customers (
     CustomerId INT IDENTITY(1,1) PRIMARY KEY,
     CustomerCode NVARCHAR(50) NOT NULL UNIQUE,
     CustomerName NVARCHAR(255) NOT NULL,
+    CustomerSegmentId INT NULL,
     TaxId NVARCHAR(50) NULL,
     PriceListId INT NULL,
     DiscountRuleId INT NULL,
-    BillingAddress NVARCHAR(1000) NULL,
-    ShippingAddress NVARCHAR(1000) NULL,
     IsActive BIT NOT NULL DEFAULT 1,
+    CustomerPriceGroupId INT NULL,
+    CONSTRAINT FK_Customers_CustomerSegments FOREIGN KEY (CustomerSegmentId) REFERENCES dbo.CustomerSegments(CustomerSegmentId),
     CONSTRAINT FK_Customers_PriceLists FOREIGN KEY (PriceListId) REFERENCES dbo.PriceLists(PriceListId),
-    CONSTRAINT FK_Customers_DiscountRules FOREIGN KEY (DiscountRuleId) REFERENCES dbo.DiscountRules(DiscountRuleId)
+    CONSTRAINT FK_Customers_DiscountRules FOREIGN KEY (DiscountRuleId) REFERENCES dbo.DiscountRules(DiscountRuleId),
+    CONSTRAINT FK_Customers_CustomerPriceGroups FOREIGN KEY (CustomerPriceGroupId) REFERENCES dbo.CustomerPriceGroups(CustomerPriceGroupId)
 );
 
 CREATE TABLE dbo.CustomerAddresses (
     CustomerAddressId INT IDENTITY(1,1) PRIMARY KEY,
     CustomerId INT NOT NULL,
     AddressCode NVARCHAR(50) NOT NULL,
+    BranchCode NVARCHAR(5) NOT NULL,
     AddressType NVARCHAR(30) NOT NULL,
     ContactName NVARCHAR(255) NULL,
     Phone NVARCHAR(50) NULL,
@@ -170,7 +237,7 @@ CREATE TABLE dbo.CustomerAddresses (
     IsActive BIT NOT NULL DEFAULT 1,
     CONSTRAINT UQ_CustomerAddresses UNIQUE (CustomerId, AddressCode),
     CONSTRAINT FK_CustomerAddresses_Customers FOREIGN KEY (CustomerId) REFERENCES dbo.Customers(CustomerId),
-    CONSTRAINT CK_CustomerAddresses_Type CHECK (AddressType IN ('billing', 'shipping', 'billing_shipping'))
+    CONSTRAINT CK_CustomerAddresses_Type CHECK (AddressType IN ('BILLING', 'SHIPPING', 'BILLING_SHIPPING'))
 );
 
 CREATE TABLE dbo.CustomerContacts (
@@ -220,6 +287,28 @@ CREATE TABLE dbo.ProductTypes (
     IsActive BIT NOT NULL DEFAULT 1
 );
 
+CREATE TABLE dbo.Surfaces (
+    SurfaceId INT IDENTITY(1,1) PRIMARY KEY,
+    SurfaceCode NVARCHAR(50) NOT NULL UNIQUE,
+    SurfaceName NVARCHAR(100) NOT NULL,
+    IsActive BIT NOT NULL DEFAULT 1
+);
+INSERT INTO dbo.Surfaces (SurfaceCode, SurfaceName) VALUES 
+('S1', 'เรียบ (Smooth)'),
+('S2', 'ขัดทราย (Sanded)'),
+('S3', 'ดิบ (Raw)');
+
+CREATE TABLE dbo.Grades (
+    GradeId INT IDENTITY(1,1) PRIMARY KEY,
+    GradeCode NVARCHAR(50) NOT NULL UNIQUE,
+    GradeName NVARCHAR(100) NOT NULL,
+    IsActive BIT NOT NULL DEFAULT 1
+);
+INSERT INTO dbo.Grades (GradeCode, GradeName) VALUES 
+('A', 'เกรด A (Grade A)'),
+('B', 'เกรด B (Grade B)'),
+('REJECT', 'ตกเกรด (Reject)');
+
 CREATE TABLE dbo.ItemTypes (
     ItemTypeId INT IDENTITY(1,1) PRIMARY KEY,
     ItemTypeCode NVARCHAR(30) NOT NULL UNIQUE,
@@ -266,6 +355,10 @@ CREATE TABLE dbo.Items (
     AreaSqm DECIMAL(18,6) NULL,
     UnitId INT NOT NULL,
     TaxCodeId INT NULL,
+    DefaultWarehouseId INT NULL,
+    ValuationMethod NVARCHAR(20) NOT NULL DEFAULT 'average',
+    AllowNegativeStock BIT NOT NULL DEFAULT 0,
+    Status NVARCHAR(30) NOT NULL DEFAULT 'draft',
     IsLotControlled BIT NOT NULL DEFAULT 0,
     IsActive BIT NOT NULL DEFAULT 1,
     CONSTRAINT FK_Items_ItemTypes FOREIGN KEY (ItemTypeId) REFERENCES dbo.ItemTypes(ItemTypeId),
@@ -274,7 +367,24 @@ CREATE TABLE dbo.Items (
     CONSTRAINT FK_Items_Widths FOREIGN KEY (WidthId) REFERENCES dbo.ItemWidths(WidthId),
     CONSTRAINT FK_Items_Lengths FOREIGN KEY (LengthId) REFERENCES dbo.ItemLengths(LengthId),
     CONSTRAINT FK_Items_Units FOREIGN KEY (UnitId) REFERENCES dbo.Units(UnitId),
-    CONSTRAINT FK_Items_TaxCodes FOREIGN KEY (TaxCodeId) REFERENCES dbo.TaxCodes(TaxCodeId)
+    CONSTRAINT FK_Items_TaxCodes FOREIGN KEY (TaxCodeId) REFERENCES dbo.TaxCodes(TaxCodeId),
+    CONSTRAINT CK_Items_ValuationMethod CHECK (ValuationMethod IN ('fifo', 'average', 'standard')),
+    CONSTRAINT CK_Items_Status CHECK (Status IN ('draft', 'active', 'obsolete'))
+);
+
+CREATE TABLE dbo.ItemSpecs (
+    ItemSpecId INT IDENTITY(1,1) PRIMARY KEY,
+    ItemId INT NOT NULL,
+    SalesSKU NVARCHAR(100) NOT NULL UNIQUE,
+    SpecCode NVARCHAR(50) NOT NULL,
+    SpecName NVARCHAR(255) NOT NULL,
+    SurfaceId INT NULL,
+    GradeId INT NULL,
+    IsActive BIT NOT NULL DEFAULT 1,
+    CONSTRAINT UQ_ItemSpecs_ItemSpecCode UNIQUE (ItemId, SpecCode),
+    CONSTRAINT FK_ItemSpecs_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
+    CONSTRAINT FK_ItemSpecs_Surfaces FOREIGN KEY (SurfaceId) REFERENCES dbo.Surfaces(SurfaceId),
+    CONSTRAINT FK_ItemSpecs_Grades FOREIGN KEY (GradeId) REFERENCES dbo.Grades(GradeId)
 );
 
 CREATE TABLE dbo.UnitConversions (
@@ -304,23 +414,47 @@ CREATE TABLE dbo.ItemUnitConversions (
     CONSTRAINT CK_ItemUnitConversions_DateRange CHECK (EffectiveTo IS NULL OR EffectiveTo >= EffectiveFrom)
 );
 
+CREATE TABLE dbo.ItemPricingPolicyVersions (
+    ItemPricingPolicyVersionId INT IDENTITY(1,1) PRIMARY KEY,
+    VersionNo NVARCHAR(30) NOT NULL UNIQUE,
+    Status NVARCHAR(30) NOT NULL DEFAULT 'draft',
+    CreatedBy INT NOT NULL,
+    CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    ApprovedBy INT NULL,
+    ApprovedAt DATETIME2 NULL,
+    Remark NVARCHAR(1000) NULL,
+    CONSTRAINT FK_ItemPricingPolicyVersions_CreatedBy FOREIGN KEY (CreatedBy) REFERENCES dbo.Users(UserId),
+    CONSTRAINT FK_ItemPricingPolicyVersions_ApprovedBy FOREIGN KEY (ApprovedBy) REFERENCES dbo.Users(UserId)
+);
+
 CREATE TABLE dbo.ItemPricingPolicies (
     ItemPricingPolicyId INT IDENTITY(1,1) PRIMARY KEY,
     ItemId INT NOT NULL,
-    PricingMethodId INT NOT NULL,
-    StandardPrice DECIMAL(18,4) NOT NULL DEFAULT 0,
-    StandardCost DECIMAL(18,4) NOT NULL DEFAULT 0,
-    MinMarginPercent DECIMAL(9,4) NULL,
-    TargetMarginPercent DECIMAL(9,4) NULL,
-    MinMarkupPercent DECIMAL(9,4) NULL,
-    TargetMarkupPercent DECIMAL(9,4) NULL,
+    ItemSpecId INT NULL,
+    PricingMethodId INT NOT NULL, -- วิธีการกำหนดราคาหลัก เช่น ราคาขายปกติ, ราคาตามสัญญา, ส่วนลดตามเงื่อนไข ฯลฯ
+    Status NVARCHAR(30) NOT NULL DEFAULT 'draft', -- สถานะของนโยบายราคา เช่น draft, requested, approved, rejected
+    ApprovedBy INT NULL,
+    ApprovedAt DATETIME2 NULL,
+    VersionNo NVARCHAR(30) NOT NULL DEFAULT 'V1',
+    Priority INT NOT NULL DEFAULT 0,
+    Remark NVARCHAR(1000) NULL,
+    StandardPrice DECIMAL(18,4) NOT NULL DEFAULT 0, -- ราคาขายปกติ (Base Price)
+    StandardCost DECIMAL(18,4) NOT NULL DEFAULT 0, -- ราคาทุนปกติ (Standard Cost)
+    MinMarginPercent DECIMAL(9,4) NULL, -- กำไรขั้นต้นขั้นต่ำเป็นเปอร์เซ็นต์
+    TargetMarginPercent DECIMAL(9,4) NULL, -- เป้าหมายกำไรขั้นต้นเป็นเปอร์เซ็นต์
+    MinMarkupPercent DECIMAL(9,4) NULL, -- กำไรขั้นต้นขั้นต่ำเป็นเปอร์เซ็นต์
+    TargetMarkupPercent DECIMAL(9,4) NULL, -- เป้าหมายกำไรขั้นต้นเป็นเปอร์เซ็นต์
     CurrencyCode CHAR(3) NOT NULL DEFAULT 'THB',
     EffectiveFrom DATE NOT NULL DEFAULT (CAST(SYSUTCDATETIME() AS DATE)),
     EffectiveTo DATE NULL,
     IsActive BIT NOT NULL DEFAULT 1,
+    CreatedBy INT NOT NULL,
     CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT FK_ItemPricingPolicies_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
+    CONSTRAINT FK_ItemPricingPolicies_ItemSpecs FOREIGN KEY (ItemSpecId) REFERENCES dbo.ItemSpecs(ItemSpecId),
     CONSTRAINT FK_ItemPricingPolicies_PricingMethods FOREIGN KEY (PricingMethodId) REFERENCES dbo.PricingMethods(PricingMethodId),
+    CONSTRAINT FK_ItemPricingPolicies_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users(UserId),
+    CONSTRAINT FK_ItemPricingPolicies_Versions FOREIGN KEY (VersionNo) REFERENCES dbo.ItemPricingPolicyVersions(VersionNo),
     CONSTRAINT CK_ItemPricingPolicies_DateRange CHECK (EffectiveTo IS NULL OR EffectiveTo >= EffectiveFrom)
 );
 
@@ -373,17 +507,28 @@ CREATE TABLE dbo.PriceListItems (
     PriceListItemId INT IDENTITY(1,1) PRIMARY KEY,
     PriceListId INT NOT NULL,
     ItemId INT NOT NULL,
+    ItemSpecId INT NULL,
     UnitId INT NOT NULL,
     UnitPrice DECIMAL(18,4) NOT NULL,
+    UnitCost DECIMAL(18,4) NULL,
     CurrencyCode CHAR(3) NOT NULL DEFAULT 'THB',
     EffectiveFrom DATE NOT NULL DEFAULT (CAST(SYSUTCDATETIME() AS DATE)),
     EffectiveTo DATE NULL,
     IsActive BIT NOT NULL DEFAULT 1,
-    CONSTRAINT UQ_PriceListItems UNIQUE (PriceListId, ItemId, UnitId, EffectiveFrom),
+    MinQuantity DECIMAL(18,4) NULL,
+    MaxQuantity DECIMAL(18,4) NULL,
+    PricingMethod NVARCHAR(30) NOT NULL DEFAULT 'FIXED_PRICE',
+    DiscountPercent DECIMAL(9,4) NULL,
+    DiscountAmount DECIMAL(18,4) NULL,
+    MarkupPercent DECIMAL(9,4) NULL,
+    MarginPercent DECIMAL(9,4) NULL,
+    CONSTRAINT UQ_PriceListItems UNIQUE (PriceListId, ItemId, ItemSpecId, UnitId, EffectiveFrom),
     CONSTRAINT FK_PriceListItems_PriceLists FOREIGN KEY (PriceListId) REFERENCES dbo.PriceLists(PriceListId),
     CONSTRAINT FK_PriceListItems_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
+    CONSTRAINT FK_PriceListItems_ItemSpecs FOREIGN KEY (ItemSpecId) REFERENCES dbo.ItemSpecs(ItemSpecId),
     CONSTRAINT FK_PriceListItems_Units FOREIGN KEY (UnitId) REFERENCES dbo.Units(UnitId),
-    CONSTRAINT CK_PriceListItems_DateRange CHECK (EffectiveTo IS NULL OR EffectiveTo >= EffectiveFrom)
+    CONSTRAINT CK_PriceListItems_DateRange CHECK (EffectiveTo IS NULL OR EffectiveTo >= EffectiveFrom),
+    CONSTRAINT FK_PriceListItems_PricingMethod FOREIGN KEY (PricingMethod) REFERENCES dbo.PricingMethods(PricingMethodCode)
 );
 
 CREATE TABLE dbo.CustomerPriceContracts (
@@ -394,10 +539,16 @@ CREATE TABLE dbo.CustomerPriceContracts (
     CurrencyCode CHAR(3) NOT NULL DEFAULT 'THB',
     EffectiveFrom DATE NOT NULL,
     EffectiveTo DATE NOT NULL,
+    Priority INT NOT NULL DEFAULT 100,
     Status NVARCHAR(30) NOT NULL DEFAULT 'active',
     CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CanCombine BIT NOT NULL DEFAULT 0,
+    StopProcessing BIT NOT NULL DEFAULT 1,
+    PricingSequenceId INT NULL,
+    IsActive BIT NOT NULL DEFAULT 1,
     CONSTRAINT FK_CustomerPriceContracts_Customers FOREIGN KEY (CustomerId) REFERENCES dbo.Customers(CustomerId),
-    CONSTRAINT CK_CustomerPriceContracts_DateRange CHECK (EffectiveTo >= EffectiveFrom)
+    CONSTRAINT CK_CustomerPriceContracts_DateRange CHECK (EffectiveTo >= EffectiveFrom),
+    CONSTRAINT FK_CustomerPriceContracts_PricingSequences FOREIGN KEY (PricingSequenceId) REFERENCES dbo.PricingSequences(PricingSequenceId)
 );
 
 CREATE TABLE dbo.CustomerPriceContractLines (
@@ -405,15 +556,24 @@ CREATE TABLE dbo.CustomerPriceContractLines (
     CustomerPriceContractId INT NOT NULL,
     LineNum INT NOT NULL,
     ItemId INT NOT NULL,
+    ItemSpecId INT NULL,
     UnitId INT NOT NULL,
     UnitPrice DECIMAL(18,4) NOT NULL,
+    UnitCost DECIMAL(18,4) NULL,
     MinQuantity DECIMAL(18,4) NULL,
     MaxQuantity DECIMAL(18,4) NULL,
+    PricingMethod NVARCHAR(30) NOT NULL DEFAULT 'FIXED_PRICE',
+    DiscountPercent DECIMAL(9,4) NULL,
+    DiscountAmount DECIMAL(18,4) NULL,
+    MarkupPercent DECIMAL(9,4) NULL,
+    MarginPercent DECIMAL(9,4) NULL,
     CONSTRAINT UQ_CustomerPriceContractLines UNIQUE (CustomerPriceContractId, LineNum),
     CONSTRAINT FK_CustomerPriceContractLines_Contracts FOREIGN KEY (CustomerPriceContractId) REFERENCES dbo.CustomerPriceContracts(CustomerPriceContractId),
     CONSTRAINT FK_CustomerPriceContractLines_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
+    CONSTRAINT FK_CustomerPriceContractLines_ItemSpecs FOREIGN KEY (ItemSpecId) REFERENCES dbo.ItemSpecs(ItemSpecId),
     CONSTRAINT FK_CustomerPriceContractLines_Units FOREIGN KEY (UnitId) REFERENCES dbo.Units(UnitId),
-    CONSTRAINT CK_CustomerPriceContractLines_QuantityRange CHECK (MaxQuantity IS NULL OR MinQuantity IS NULL OR MaxQuantity >= MinQuantity)
+    CONSTRAINT CK_CustomerPriceContractLines_QuantityRange CHECK (MaxQuantity IS NULL OR MinQuantity IS NULL OR MaxQuantity >= MinQuantity),
+    CONSTRAINT FK_CustomerPriceContractLines_PricingMethods FOREIGN KEY (PricingMethod) REFERENCES dbo.PricingMethods(PricingMethodCode)
 );
 
 CREATE TABLE dbo.Warehouses (
@@ -422,6 +582,10 @@ CREATE TABLE dbo.Warehouses (
     WarehouseName NVARCHAR(255) NOT NULL,
     IsActive BIT NOT NULL DEFAULT 1
 );
+
+ALTER TABLE dbo.Items
+ADD CONSTRAINT FK_Items_DefaultWarehouses
+    FOREIGN KEY (DefaultWarehouseId) REFERENCES dbo.Warehouses(WarehouseId);
 
 CREATE TABLE dbo.WarehouseLocations (
     LocationId INT IDENTITY(1,1) PRIMARY KEY,
@@ -450,6 +614,54 @@ CREATE TABLE dbo.Lots (
     CONSTRAINT UQ_Lots UNIQUE (ItemId, LotNo),
     CONSTRAINT FK_Lots_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
     CONSTRAINT CK_Lots_QualityStatus CHECK (QualityStatus IN ('pending', 'approved', 'rejected', 'hold'))
+);
+
+CREATE TABLE dbo.InventoryUnits (
+    InventoryUnitId BIGINT IDENTITY(1,1) PRIMARY KEY,
+    ItemId INT NOT NULL,
+    ItemSpecId INT NULL,
+    TrackingNo NVARCHAR(100) NOT NULL UNIQUE,
+    LotId BIGINT NULL,
+    GradeId INT NULL,
+    WarehouseId INT NOT NULL,
+    LocationId INT NOT NULL,
+    QtySheet DECIMAL(18,4) NOT NULL,
+    QtySqm DECIMAL(18,4) NULL,
+    PalletNo NVARCHAR(100) NULL,
+    InventoryStatus NVARCHAR(30) NOT NULL DEFAULT 'available',
+    CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT FK_InventoryUnits_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
+    CONSTRAINT FK_InventoryUnits_ItemSpecs FOREIGN KEY (ItemSpecId) REFERENCES dbo.ItemSpecs(ItemSpecId),
+    CONSTRAINT FK_InventoryUnits_Lots FOREIGN KEY (LotId) REFERENCES dbo.Lots(LotId),
+    CONSTRAINT FK_InventoryUnits_Warehouses FOREIGN KEY (WarehouseId) REFERENCES dbo.Warehouses(WarehouseId),
+    CONSTRAINT FK_InventoryUnits_Locations FOREIGN KEY (LocationId) REFERENCES dbo.WarehouseLocations(LocationId),
+    CONSTRAINT FK_InventoryUnits_Grades FOREIGN KEY (GradeId) REFERENCES dbo.Grades(GradeId),
+    CONSTRAINT CK_InventoryUnits_Status CHECK (InventoryStatus IN ('available', 'quarantine', 'blocked', 'damaged'))
+);
+
+CREATE TABLE dbo.InventoryReservations (
+    InventoryReservationId BIGINT IDENTITY(1,1) PRIMARY KEY,
+    ReferenceType NVARCHAR(30) NOT NULL,
+    ReferenceId INT NULL,
+    ReferenceLineId INT NULL,
+    ItemId INT NOT NULL,
+    ItemSpecId INT NULL,
+    LotId BIGINT NULL,
+    WarehouseId INT NULL,
+    LocationId INT NULL,
+    InventoryUnitId BIGINT NULL,
+    ReservedQty DECIMAL(18,4) NOT NULL,
+    PickedQty DECIMAL(18,4) NOT NULL DEFAULT 0,
+    Status NVARCHAR(30) NOT NULL DEFAULT 'open',
+    CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT FK_InventoryReservations_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
+    CONSTRAINT FK_InventoryReservations_ItemSpecs FOREIGN KEY (ItemSpecId) REFERENCES dbo.ItemSpecs(ItemSpecId),
+    CONSTRAINT FK_InventoryReservations_Lots FOREIGN KEY (LotId) REFERENCES dbo.Lots(LotId),
+    CONSTRAINT FK_InventoryReservations_Warehouses FOREIGN KEY (WarehouseId) REFERENCES dbo.Warehouses(WarehouseId),
+    CONSTRAINT FK_InventoryReservations_Locations FOREIGN KEY (LocationId) REFERENCES dbo.WarehouseLocations(LocationId),
+    CONSTRAINT FK_InventoryReservations_Units FOREIGN KEY (InventoryUnitId) REFERENCES dbo.InventoryUnits(InventoryUnitId),
+    CONSTRAINT CK_InventoryReservations_ReferenceType CHECK (ReferenceType IN ('SO', 'GI', 'TRANSFER')),
+    CONSTRAINT CK_InventoryReservations_Status CHECK (Status IN ('open', 'allocated', 'picked', 'released', 'cancelled'))
 );
 
 CREATE TABLE dbo.QualitySpecs (
@@ -573,6 +785,19 @@ CREATE TABLE dbo.ProductionOutput (
     CONSTRAINT FK_ProductionOutput_Units FOREIGN KEY (UnitId) REFERENCES dbo.Units(UnitId)
 );
 
+CREATE TABLE dbo.PricingSources (
+    PricingSourceCode NVARCHAR(40) PRIMARY KEY,
+    PricingSourceName NVARCHAR(100) NOT NULL
+);
+
+INSERT INTO dbo.PricingSources
+VALUES
+('CONTRACT', 'Customer Contract'),
+('CUSTOMER_PRICE_LIST', 'Customer Price List'),
+('ITEM_DEFAULT', 'Item Default'),
+('PROMOTION', 'Promotion'),
+('MANUAL', 'Manual');
+
 CREATE TABLE dbo.SalesOrders (
     SalesOrderId INT IDENTITY(1,1) PRIMARY KEY,
     DocumentNo NVARCHAR(50) NOT NULL UNIQUE,
@@ -580,8 +805,16 @@ CREATE TABLE dbo.SalesOrders (
     CustomerId INT NOT NULL,
     DocumentDate DATE NOT NULL,
     RequiredDate DATE NULL,
+    CustomerPoNo NVARCHAR(100) NULL,
+    CustomerPoDate DATE NULL,
+    SalesPersonId INT NULL,
+    PaymentTermId INT NULL,
+    PriceListId INT NULL,
+    WarehouseId INT NULL,
+    TaxType NVARCHAR(20) NOT NULL DEFAULT 'exclusive',
     Status NVARCHAR(30) NOT NULL DEFAULT 'draft',
     ShippingAddress NVARCHAR(1000) NULL,
+    Remarks NVARCHAR(MAX) NULL,
     CurrencyCode CHAR(3) NOT NULL DEFAULT 'THB',
     SubTotalAmount DECIMAL(18,4) NOT NULL DEFAULT 0,
     DiscountAmount DECIMAL(18,4) NOT NULL DEFAULT 0,
@@ -590,9 +823,16 @@ CREATE TABLE dbo.SalesOrders (
     CreatedBy INT NOT NULL,
     CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     UpdatedAt DATETIME2 NULL,
+    DiscountRuleId INT NULL,
+    PricingRemarks NVARCHAR(1000) NULL,
     CONSTRAINT FK_SalesOrders_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches(BranchId),
     CONSTRAINT FK_SalesOrders_Customers FOREIGN KEY (CustomerId) REFERENCES dbo.Customers(CustomerId),
-    CONSTRAINT FK_SalesOrders_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users(UserId)
+    CONSTRAINT FK_SalesOrders_SalesPersons FOREIGN KEY (SalesPersonId) REFERENCES dbo.Users(UserId),
+    CONSTRAINT FK_SalesOrders_PaymentTerms FOREIGN KEY (PaymentTermId) REFERENCES dbo.PaymentTerms(PaymentTermId),
+    CONSTRAINT FK_SalesOrders_PriceLists FOREIGN KEY (PriceListId) REFERENCES dbo.PriceLists(PriceListId),
+    CONSTRAINT FK_SalesOrders_Warehouses FOREIGN KEY (WarehouseId) REFERENCES dbo.Warehouses(WarehouseId),
+    CONSTRAINT FK_SalesOrders_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users(UserId),
+    CONSTRAINT FK_SalesOrders_DiscountRules FOREIGN KEY (DiscountRuleId) REFERENCES dbo.DiscountRules(DiscountRuleId)
 );
 
 CREATE TABLE dbo.SalesOrderLines (
@@ -600,6 +840,7 @@ CREATE TABLE dbo.SalesOrderLines (
     SalesOrderId INT NOT NULL,
     LineNum INT NOT NULL,
     ItemId INT NOT NULL,
+    ItemSpecId INT NULL,
     Quantity DECIMAL(18,4) NOT NULL,
     UnitPrice DECIMAL(18,4) NOT NULL DEFAULT 0,
     DiscountPercent DECIMAL(9,4) NULL,
@@ -611,15 +852,20 @@ CREATE TABLE dbo.SalesOrderLines (
     MarginPercentSnapshot DECIMAL(9,4) NULL,
     MarkupPercentSnapshot DECIMAL(9,4) NULL,
     LineAmount DECIMAL(18,4) NOT NULL DEFAULT 0,
+    TaxCodeId INT NULL,
     TaxAmount DECIMAL(18,4) NOT NULL DEFAULT 0,
     UnitId INT NOT NULL,
+    PricingStatus NVARCHAR(30) NOT NULL DEFAULT 'PENDING',
+    ResolvedAt DATETIME2 NULL,
+    PricingResolvedBy NVARCHAR(100) NULL,
     CONSTRAINT UQ_SalesOrderLines UNIQUE (SalesOrderId, LineNum),
     CONSTRAINT FK_SalesOrderLines_SalesOrders FOREIGN KEY (SalesOrderId) REFERENCES dbo.SalesOrders(SalesOrderId),
     CONSTRAINT FK_SalesOrderLines_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
+    CONSTRAINT FK_SalesOrderLines_ItemSpecs FOREIGN KEY (ItemSpecId) REFERENCES dbo.ItemSpecs(ItemSpecId),
+    CONSTRAINT FK_SalesOrderLines_TaxCodes FOREIGN KEY (TaxCodeId) REFERENCES dbo.TaxCodes(TaxCodeId),
     CONSTRAINT FK_SalesOrderLines_Units FOREIGN KEY (UnitId) REFERENCES dbo.Units(UnitId),
-    CONSTRAINT CK_SalesOrderLines_PricingSource CHECK (
-        PricingSource IS NULL OR PricingSource IN ('contract', 'customer_price_list', 'item_default', 'manual')
-    )
+    CONSTRAINT FK_SalesOrderLines_PricingSources FOREIGN KEY (PricingSource) REFERENCES dbo.PricingSources(PricingSourceCode),
+    CONSTRAINT CK_SalesOrderLines_PricingStatus CHECK (PricingStatus IN ('PENDING', 'RESOLVED', 'MANUAL_OVERRIDE', 'ERROR'))
 );
 
 CREATE TABLE dbo.PurchaseOrders (
@@ -693,7 +939,16 @@ CREATE TABLE dbo.Quotations (
     CustomerId INT NOT NULL,
     DocumentDate DATE NOT NULL,
     ValidUntil DATE NULL,
+    CustomerPoNo NVARCHAR(100) NULL,
+    CustomerPoDate DATE NULL,
+    SalesPersonId INT NULL,
+    PaymentTermId INT NULL,
+    PriceListId INT NULL,
+    WarehouseId INT NULL,
+    TaxType NVARCHAR(20) NOT NULL DEFAULT 'exclusive',
     Status NVARCHAR(30) NOT NULL DEFAULT 'draft',
+    Remarks NVARCHAR(MAX) NULL,
+    BillingAddress NVARCHAR(1000) NULL,
     CurrencyCode CHAR(3) NOT NULL DEFAULT 'THB',
     SubTotalAmount DECIMAL(18,4) NOT NULL DEFAULT 0,
     DiscountAmount DECIMAL(18,4) NOT NULL DEFAULT 0,
@@ -701,8 +956,13 @@ CREATE TABLE dbo.Quotations (
     GrandTotalAmount DECIMAL(18,4) NOT NULL DEFAULT 0,
     CreatedBy INT NOT NULL,
     CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    UpdatedAt DATETIME2 NULL,
     CONSTRAINT FK_Quotations_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches(BranchId),
     CONSTRAINT FK_Quotations_Customers FOREIGN KEY (CustomerId) REFERENCES dbo.Customers(CustomerId),
+    CONSTRAINT FK_Quotations_SalesPersons FOREIGN KEY (SalesPersonId) REFERENCES dbo.Users(UserId),
+    CONSTRAINT FK_Quotations_PaymentTerms FOREIGN KEY (PaymentTermId) REFERENCES dbo.PaymentTerms(PaymentTermId),
+    CONSTRAINT FK_Quotations_PriceLists FOREIGN KEY (PriceListId) REFERENCES dbo.PriceLists(PriceListId),
+    CONSTRAINT FK_Quotations_Warehouses FOREIGN KEY (WarehouseId) REFERENCES dbo.Warehouses(WarehouseId),
     CONSTRAINT FK_Quotations_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users(UserId)
 );
 
@@ -722,15 +982,17 @@ CREATE TABLE dbo.QuotationLines (
     MarginPercentSnapshot DECIMAL(9,4) NULL,
     MarkupPercentSnapshot DECIMAL(9,4) NULL,
     LineAmount DECIMAL(18,4) NOT NULL DEFAULT 0,
+    TaxCodeId INT NULL,
     TaxAmount DECIMAL(18,4) NOT NULL DEFAULT 0,
     UnitId INT NOT NULL,
+    ItemSpecId INT NULL,
     CONSTRAINT UQ_QuotationLines UNIQUE (QuotationId, LineNum),
     CONSTRAINT FK_QuotationLines_Quotations FOREIGN KEY (QuotationId) REFERENCES dbo.Quotations(QuotationId),
     CONSTRAINT FK_QuotationLines_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
+    CONSTRAINT FK_QuotationLines_ItemSpecs FOREIGN KEY (ItemSpecId) REFERENCES dbo.ItemSpecs(ItemSpecId),
+    CONSTRAINT FK_QuotationLines_TaxCodes FOREIGN KEY (TaxCodeId) REFERENCES dbo.TaxCodes(TaxCodeId),
     CONSTRAINT FK_QuotationLines_Units FOREIGN KEY (UnitId) REFERENCES dbo.Units(UnitId),
-    CONSTRAINT CK_QuotationLines_PricingSource CHECK (
-        PricingSource IS NULL OR PricingSource IN ('contract', 'customer_price_list', 'item_default', 'manual')
-    )
+    CONSTRAINT FK_QuotationLines_PricingSources FOREIGN KEY (PricingSource) REFERENCES dbo.PricingSources(PricingSourceCode)
 );
 
 CREATE TABLE dbo.SalesInvoices (
@@ -742,7 +1004,15 @@ CREATE TABLE dbo.SalesInvoices (
     DeliveryOrderId INT NULL,
     DocumentDate DATE NOT NULL,
     DueDate DATE NULL,
+    CustomerPoNo NVARCHAR(100) NULL,
+    CustomerPoDate DATE NULL,
+    SalesPersonId INT NULL,
+    PaymentTermId INT NULL,
+    PriceListId INT NULL,
+    WarehouseId INT NULL,
+    TaxType NVARCHAR(20) NOT NULL DEFAULT 'exclusive',
     Status NVARCHAR(30) NOT NULL DEFAULT 'draft',
+    Remarks NVARCHAR(MAX) NULL,
     CurrencyCode CHAR(3) NOT NULL DEFAULT 'THB',
     SubTotalAmount DECIMAL(18,4) NOT NULL DEFAULT 0,
     DiscountAmount DECIMAL(18,4) NOT NULL DEFAULT 0,
@@ -755,6 +1025,10 @@ CREATE TABLE dbo.SalesInvoices (
     CONSTRAINT FK_SalesInvoices_Customers FOREIGN KEY (CustomerId) REFERENCES dbo.Customers(CustomerId),
     CONSTRAINT FK_SalesInvoices_SalesOrders FOREIGN KEY (SalesOrderId) REFERENCES dbo.SalesOrders(SalesOrderId),
     CONSTRAINT FK_SalesInvoices_DeliveryOrders FOREIGN KEY (DeliveryOrderId) REFERENCES dbo.DeliveryOrders(DeliveryOrderId),
+    CONSTRAINT FK_SalesInvoices_SalesPersons FOREIGN KEY (SalesPersonId) REFERENCES dbo.Users(UserId),
+    CONSTRAINT FK_SalesInvoices_PaymentTerms FOREIGN KEY (PaymentTermId) REFERENCES dbo.PaymentTerms(PaymentTermId),
+    CONSTRAINT FK_SalesInvoices_PriceLists FOREIGN KEY (PriceListId) REFERENCES dbo.PriceLists(PriceListId),
+    CONSTRAINT FK_SalesInvoices_Warehouses FOREIGN KEY (WarehouseId) REFERENCES dbo.Warehouses(WarehouseId),
     CONSTRAINT FK_SalesInvoices_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users(UserId)
 );
 
@@ -769,10 +1043,14 @@ CREATE TABLE dbo.SalesInvoiceLines (
     DiscountAmount DECIMAL(18,4) NOT NULL DEFAULT 0,
     TaxRatePercent DECIMAL(9,4) NOT NULL DEFAULT 0,
     LineAmount DECIMAL(18,4) NOT NULL DEFAULT 0,
+    TaxCodeId INT NULL,
     TaxAmount DECIMAL(18,4) NOT NULL DEFAULT 0,
+    ItemSpecId INT NULL,
     CONSTRAINT UQ_SalesInvoiceLines UNIQUE (SalesInvoiceId, LineNum),
     CONSTRAINT FK_SalesInvoiceLines_Invoices FOREIGN KEY (SalesInvoiceId) REFERENCES dbo.SalesInvoices(SalesInvoiceId),
     CONSTRAINT FK_SalesInvoiceLines_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
+    CONSTRAINT FK_SalesInvoiceLines_ItemSpecs FOREIGN KEY (ItemSpecId) REFERENCES dbo.ItemSpecs(ItemSpecId),
+    CONSTRAINT FK_SalesInvoiceLines_TaxCodes FOREIGN KEY (TaxCodeId) REFERENCES dbo.TaxCodes(TaxCodeId),
     CONSTRAINT FK_SalesInvoiceLines_Units FOREIGN KEY (UnitId) REFERENCES dbo.Units(UnitId)
 );
 
@@ -882,21 +1160,182 @@ CREATE TABLE dbo.StockMovementTypes (
     CONSTRAINT CK_StockMovementTypes_Direction CHECK (Direction IN ('in', 'out', 'transfer', 'adjustment'))
 );
 
+CREATE TABLE dbo.GoodsIssueTypes (
+    GoodsIssueTypeId INT IDENTITY(1,1) PRIMARY KEY,
+    GoodsIssueTypeCode NVARCHAR(40) NOT NULL UNIQUE,
+    GoodsIssueTypeName NVARCHAR(100) NOT NULL,
+    MovementTypeCode NVARCHAR(40) NOT NULL DEFAULT 'goods_issue',
+    RequiresCustomer BIT NOT NULL DEFAULT 0,
+    RequiresApproval BIT NOT NULL DEFAULT 0,
+    IsActive BIT NOT NULL DEFAULT 1,
+    CONSTRAINT FK_GoodsIssueTypes_StockMovementTypes FOREIGN KEY (MovementTypeCode) REFERENCES dbo.StockMovementTypes(MovementTypeCode)
+);
+
+CREATE TABLE dbo.GoodsReceiptTypes (
+    GoodsReceiptTypeId INT IDENTITY(1,1) PRIMARY KEY,
+    GoodsReceiptTypeCode NVARCHAR(40) NOT NULL UNIQUE,
+    GoodsReceiptTypeName NVARCHAR(100) NOT NULL,
+    MovementTypeCode NVARCHAR(40) NOT NULL DEFAULT 'goods_receipt',
+    RequiresVendor BIT NOT NULL DEFAULT 0,
+    RequiresProductionOrder BIT NOT NULL DEFAULT 0,
+    RequiresApproval BIT NOT NULL DEFAULT 0,
+    IsActive BIT NOT NULL DEFAULT 1,
+    CONSTRAINT FK_GoodsReceiptTypes_StockMovementTypes FOREIGN KEY (MovementTypeCode) REFERENCES dbo.StockMovementTypes(MovementTypeCode)
+);
+
+CREATE TABLE dbo.GoodsIssues (
+    GoodsIssueId INT IDENTITY(1,1) PRIMARY KEY,
+    DocumentNo NVARCHAR(50) NOT NULL UNIQUE,
+    BranchId INT NULL,
+    GoodsIssueTypeId INT NOT NULL,
+    CustomerId INT NULL,
+    WarehouseId INT NOT NULL,
+    RequestDate DATE NOT NULL,
+    IssueDate DATE NULL,
+    Status NVARCHAR(30) NOT NULL DEFAULT 'draft',
+    LimitSheetTotal DECIMAL(18,4) NOT NULL DEFAULT 0,
+    RequestedSheetTotal DECIMAL(18,4) NOT NULL DEFAULT 0,
+    IssuedSheetTotal DECIMAL(18,4) NOT NULL DEFAULT 0,
+    PalletCountTotal DECIMAL(18,4) NOT NULL DEFAULT 0,
+    M3Total DECIMAL(18,6) NOT NULL DEFAULT 0,
+    Remark NVARCHAR(1000) NULL,
+    PostedAt DATETIME2 NULL,
+    PostedBy INT NULL,
+    CreatedBy INT NOT NULL,
+    CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    UpdatedAt DATETIME2 NULL,
+    CONSTRAINT FK_GoodsIssues_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches(BranchId),
+    CONSTRAINT FK_GoodsIssues_Types FOREIGN KEY (GoodsIssueTypeId) REFERENCES dbo.GoodsIssueTypes(GoodsIssueTypeId),
+    CONSTRAINT FK_GoodsIssues_Customers FOREIGN KEY (CustomerId) REFERENCES dbo.Customers(CustomerId),
+    CONSTRAINT FK_GoodsIssues_Warehouses FOREIGN KEY (WarehouseId) REFERENCES dbo.Warehouses(WarehouseId),
+    CONSTRAINT FK_GoodsIssues_PostedBy FOREIGN KEY (PostedBy) REFERENCES dbo.Users(UserId),
+    CONSTRAINT FK_GoodsIssues_CreatedBy FOREIGN KEY (CreatedBy) REFERENCES dbo.Users(UserId),
+    CONSTRAINT CK_GoodsIssues_Status CHECK (Status IN ('draft', 'requested', 'approved', 'issued', 'cancelled'))
+);
+
+CREATE TABLE dbo.GoodsIssueLines (
+    GoodsIssueLineId INT IDENTITY(1,1) PRIMARY KEY,
+    GoodsIssueId INT NOT NULL,
+    LineNum INT NOT NULL,
+    ItemId INT NOT NULL,
+    ItemSpecId INT NULL,
+    LotId BIGINT NULL,
+    WarehouseId INT NULL,
+    LocationId INT NULL,
+    UnitId INT NOT NULL,
+    RequestedQuantity DECIMAL(18,4) NOT NULL DEFAULT 0,
+    IssuedQuantity DECIMAL(18,4) NOT NULL DEFAULT 0,
+    RequestedSheetQty DECIMAL(18,4) NULL,
+    IssuedSheetQty DECIMAL(18,4) NULL,
+    LimitSheetQty DECIMAL(18,4) NULL,
+    PalletCount DECIMAL(18,4) NULL,
+    M3Quantity DECIMAL(18,6) NULL,
+    ProductTypeId INT NULL,
+    ThicknessId INT NULL,
+    WidthId INT NULL,
+    LengthId INT NULL,
+    Remark NVARCHAR(1000) NULL,
+    CONSTRAINT UQ_GoodsIssueLines UNIQUE (GoodsIssueId, LineNum),
+    CONSTRAINT FK_GoodsIssueLines_GoodsIssues FOREIGN KEY (GoodsIssueId) REFERENCES dbo.GoodsIssues(GoodsIssueId),
+    CONSTRAINT FK_GoodsIssueLines_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
+    CONSTRAINT FK_GoodsIssueLines_ItemSpecs FOREIGN KEY (ItemSpecId) REFERENCES dbo.ItemSpecs(ItemSpecId),
+    CONSTRAINT FK_GoodsIssueLines_Lots FOREIGN KEY (LotId) REFERENCES dbo.Lots(LotId),
+    CONSTRAINT FK_GoodsIssueLines_Warehouses FOREIGN KEY (WarehouseId) REFERENCES dbo.Warehouses(WarehouseId),
+    CONSTRAINT FK_GoodsIssueLines_Locations FOREIGN KEY (LocationId) REFERENCES dbo.WarehouseLocations(LocationId),
+    CONSTRAINT FK_GoodsIssueLines_Units FOREIGN KEY (UnitId) REFERENCES dbo.Units(UnitId),
+    CONSTRAINT FK_GoodsIssueLines_ProductTypes FOREIGN KEY (ProductTypeId) REFERENCES dbo.ProductTypes(ProductTypeId),
+    CONSTRAINT FK_GoodsIssueLines_Thicknesses FOREIGN KEY (ThicknessId) REFERENCES dbo.ItemThicknesses(ThicknessId),
+    CONSTRAINT FK_GoodsIssueLines_Widths FOREIGN KEY (WidthId) REFERENCES dbo.ItemWidths(WidthId),
+    CONSTRAINT FK_GoodsIssueLines_Lengths FOREIGN KEY (LengthId) REFERENCES dbo.ItemLengths(LengthId)
+);
+
+CREATE TABLE dbo.GoodsReceipts (
+    GoodsReceiptId INT IDENTITY(1,1) PRIMARY KEY,
+    DocumentNo NVARCHAR(50) NOT NULL UNIQUE,
+    BranchId INT NULL,
+    GoodsReceiptTypeId INT NOT NULL,
+    VendorId INT NULL,
+    CustomerId INT NULL,
+    PurchaseOrderId INT NULL,
+    ProductionOrderId INT NULL,
+    WarehouseId INT NOT NULL,
+    ReceiptDate DATE NOT NULL,
+    Status NVARCHAR(30) NOT NULL DEFAULT 'draft',
+    ReceivedSheetTotal DECIMAL(18,4) NOT NULL DEFAULT 0,
+    PalletCountTotal DECIMAL(18,4) NOT NULL DEFAULT 0,
+    M3Total DECIMAL(18,6) NOT NULL DEFAULT 0,
+    Remark NVARCHAR(1000) NULL,
+    PostedAt DATETIME2 NULL,
+    PostedBy INT NULL,
+    CreatedBy INT NOT NULL,
+    CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    UpdatedAt DATETIME2 NULL,
+    CONSTRAINT FK_GoodsReceipts_Branches FOREIGN KEY (BranchId) REFERENCES dbo.Branches(BranchId),
+    CONSTRAINT FK_GoodsReceipts_Types FOREIGN KEY (GoodsReceiptTypeId) REFERENCES dbo.GoodsReceiptTypes(GoodsReceiptTypeId),
+    CONSTRAINT FK_GoodsReceipts_Vendors FOREIGN KEY (VendorId) REFERENCES dbo.Vendors(VendorId),
+    CONSTRAINT FK_GoodsReceipts_Customers FOREIGN KEY (CustomerId) REFERENCES dbo.Customers(CustomerId),
+    CONSTRAINT FK_GoodsReceipts_PurchaseOrders FOREIGN KEY (PurchaseOrderId) REFERENCES dbo.PurchaseOrders(PurchaseOrderId),
+    CONSTRAINT FK_GoodsReceipts_ProductionOrders FOREIGN KEY (ProductionOrderId) REFERENCES dbo.ProductionOrders(ProductionOrderId),
+    CONSTRAINT FK_GoodsReceipts_Warehouses FOREIGN KEY (WarehouseId) REFERENCES dbo.Warehouses(WarehouseId),
+    CONSTRAINT FK_GoodsReceipts_PostedBy FOREIGN KEY (PostedBy) REFERENCES dbo.Users(UserId),
+    CONSTRAINT FK_GoodsReceipts_CreatedBy FOREIGN KEY (CreatedBy) REFERENCES dbo.Users(UserId),
+    CONSTRAINT CK_GoodsReceipts_Status CHECK (Status IN ('draft', 'received', 'posted', 'cancelled'))
+);
+
+CREATE TABLE dbo.GoodsReceiptLines (
+    GoodsReceiptLineId INT IDENTITY(1,1) PRIMARY KEY,
+    GoodsReceiptId INT NOT NULL,
+    LineNum INT NOT NULL,
+    ItemId INT NOT NULL,
+    ItemSpecId INT NULL,
+    LotId BIGINT NULL,
+    LotNo NVARCHAR(80) NULL,
+    WarehouseId INT NULL,
+    LocationId INT NULL,
+    UnitId INT NOT NULL,
+    ReceivedQuantity DECIMAL(18,4) NOT NULL DEFAULT 0,
+    ReceivedSheetQty DECIMAL(18,4) NULL,
+    PalletCount DECIMAL(18,4) NULL,
+    M3Quantity DECIMAL(18,6) NULL,
+    ProductTypeId INT NULL,
+    ThicknessId INT NULL,
+    WidthId INT NULL,
+    LengthId INT NULL,
+    UnitCostSnapshot DECIMAL(18,4) NULL,
+    Remark NVARCHAR(1000) NULL,
+    CONSTRAINT UQ_GoodsReceiptLines UNIQUE (GoodsReceiptId, LineNum),
+    CONSTRAINT FK_GoodsReceiptLines_GoodsReceipts FOREIGN KEY (GoodsReceiptId) REFERENCES dbo.GoodsReceipts(GoodsReceiptId),
+    CONSTRAINT FK_GoodsReceiptLines_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
+    CONSTRAINT FK_GoodsReceiptLines_ItemSpecs FOREIGN KEY (ItemSpecId) REFERENCES dbo.ItemSpecs(ItemSpecId),
+    CONSTRAINT FK_GoodsReceiptLines_Lots FOREIGN KEY (LotId) REFERENCES dbo.Lots(LotId),
+    CONSTRAINT FK_GoodsReceiptLines_Warehouses FOREIGN KEY (WarehouseId) REFERENCES dbo.Warehouses(WarehouseId),
+    CONSTRAINT FK_GoodsReceiptLines_Locations FOREIGN KEY (LocationId) REFERENCES dbo.WarehouseLocations(LocationId),
+    CONSTRAINT FK_GoodsReceiptLines_Units FOREIGN KEY (UnitId) REFERENCES dbo.Units(UnitId),
+    CONSTRAINT FK_GoodsReceiptLines_ProductTypes FOREIGN KEY (ProductTypeId) REFERENCES dbo.ProductTypes(ProductTypeId),
+    CONSTRAINT FK_GoodsReceiptLines_Thicknesses FOREIGN KEY (ThicknessId) REFERENCES dbo.ItemThicknesses(ThicknessId),
+    CONSTRAINT FK_GoodsReceiptLines_Widths FOREIGN KEY (WidthId) REFERENCES dbo.ItemWidths(WidthId),
+    CONSTRAINT FK_GoodsReceiptLines_Lengths FOREIGN KEY (LengthId) REFERENCES dbo.ItemLengths(LengthId)
+);
+
 CREATE TABLE dbo.StockOnHand (
     StockOnHandId INT IDENTITY(1,1) PRIMARY KEY,
     ItemId INT NOT NULL,
+    ItemSpecId INT NULL,
     WarehouseId INT NOT NULL,
     LocationId INT NULL,
     LotId BIGINT NULL,
     LotNo NVARCHAR(80) NULL,
+    GradeId INT NULL,
     QuantityOnHand DECIMAL(18,4) NOT NULL DEFAULT 0,
     QuantityReserved DECIMAL(18,4) NOT NULL DEFAULT 0,
     UpdatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-    CONSTRAINT UQ_StockOnHand UNIQUE (ItemId, WarehouseId, LocationId, LotId, LotNo),
+    CONSTRAINT UQ_StockOnHand UNIQUE (ItemId, ItemSpecId, WarehouseId, LocationId, LotId, LotNo, GradeId),
     CONSTRAINT FK_StockOnHand_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
+    CONSTRAINT FK_StockOnHand_ItemSpecs FOREIGN KEY (ItemSpecId) REFERENCES dbo.ItemSpecs(ItemSpecId),
     CONSTRAINT FK_StockOnHand_Warehouses FOREIGN KEY (WarehouseId) REFERENCES dbo.Warehouses(WarehouseId),
     CONSTRAINT FK_StockOnHand_Locations FOREIGN KEY (LocationId) REFERENCES dbo.WarehouseLocations(LocationId),
-    CONSTRAINT FK_StockOnHand_Lots FOREIGN KEY (LotId) REFERENCES dbo.Lots(LotId)
+    CONSTRAINT FK_StockOnHand_Lots FOREIGN KEY (LotId) REFERENCES dbo.Lots(LotId),
+    CONSTRAINT FK_StockOnHand_Grades FOREIGN KEY (GradeId) REFERENCES dbo.Grades(GradeId)
 );
 
 CREATE TABLE dbo.StockMovements (
@@ -986,12 +1425,20 @@ CREATE TABLE dbo.WmsTaskLines (
     WmsTaskLineId BIGINT IDENTITY(1,1) PRIMARY KEY,
     WmsTaskId BIGINT NOT NULL,
     ItemId INT NOT NULL,
+    ItemSpecId INT NULL,
+    LotId BIGINT NULL,
+    InventoryReservationId BIGINT NULL,
+    InventoryUnitId BIGINT NULL,
     FromLocationId INT NULL,
     ToLocationId INT NULL,
     QuantityRequired DECIMAL(18,4) NOT NULL,
     QuantityCompleted DECIMAL(18,4) NOT NULL DEFAULT 0,
     CONSTRAINT FK_WmsTaskLines_WmsTasks FOREIGN KEY (WmsTaskId) REFERENCES dbo.WmsTasks(WmsTaskId),
     CONSTRAINT FK_WmsTaskLines_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
+    CONSTRAINT FK_WmsTaskLines_ItemSpecs FOREIGN KEY (ItemSpecId) REFERENCES dbo.ItemSpecs(ItemSpecId),
+    CONSTRAINT FK_WmsTaskLines_Lots FOREIGN KEY (LotId) REFERENCES dbo.Lots(LotId),
+    CONSTRAINT FK_WmsTaskLines_Reservations FOREIGN KEY (InventoryReservationId) REFERENCES dbo.InventoryReservations(InventoryReservationId),
+    CONSTRAINT FK_WmsTaskLines_InventoryUnits FOREIGN KEY (InventoryUnitId) REFERENCES dbo.InventoryUnits(InventoryUnitId),
     CONSTRAINT FK_WmsTaskLines_FromLocations FOREIGN KEY (FromLocationId) REFERENCES dbo.WarehouseLocations(LocationId),
     CONSTRAINT FK_WmsTaskLines_ToLocations FOREIGN KEY (ToLocationId) REFERENCES dbo.WarehouseLocations(LocationId)
 );
@@ -1021,6 +1468,31 @@ CREATE TABLE dbo.ApprovalRequests (
     CONSTRAINT CK_ApprovalRequests_Status CHECK (Status IN ('pending', 'approved', 'rejected', 'cancelled'))
 );
 
+CREATE TABLE dbo.WorkflowDefinitions (
+    WorkflowDefinitionId INT IDENTITY(1,1) PRIMARY KEY,
+    WorkflowCode NVARCHAR(60) NOT NULL UNIQUE,
+    WorkflowName NVARCHAR(255) NOT NULL,
+    DocumentType NVARCHAR(40) NOT NULL,
+    IsActive BIT NOT NULL DEFAULT 1,
+    CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);
+
+CREATE TABLE dbo.WorkflowSteps (
+    WorkflowStepId INT IDENTITY(1,1) PRIMARY KEY,
+    WorkflowDefinitionId INT NOT NULL,
+    StepNo INT NOT NULL,
+    ApprovalType NVARCHAR(20) NOT NULL DEFAULT 'sequential',
+    ApproverRoleId INT NULL,
+    ApproverUserId INT NULL,
+    IsRequired BIT NOT NULL DEFAULT 1,
+    CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT UQ_WorkflowSteps UNIQUE (WorkflowDefinitionId, StepNo),
+    CONSTRAINT FK_WorkflowSteps_Def FOREIGN KEY (WorkflowDefinitionId) REFERENCES dbo.WorkflowDefinitions(WorkflowDefinitionId),
+    CONSTRAINT FK_WorkflowSteps_Role FOREIGN KEY (ApproverRoleId) REFERENCES dbo.Roles(RoleId),
+    CONSTRAINT FK_WorkflowSteps_User FOREIGN KEY (ApproverUserId) REFERENCES dbo.Users(UserId),
+    CONSTRAINT CK_WorkflowSteps_ApprovalType CHECK (ApprovalType IN ('sequential'))
+);
+
 CREATE TABLE dbo.ApprovalSteps (
     ApprovalStepId BIGINT IDENTITY(1,1) PRIMARY KEY,
     ApprovalRequestId BIGINT NOT NULL,
@@ -1035,6 +1507,55 @@ CREATE TABLE dbo.ApprovalSteps (
     CONSTRAINT FK_ApprovalSteps_Users FOREIGN KEY (ApproverUserId) REFERENCES dbo.Users(UserId),
     CONSTRAINT FK_ApprovalSteps_Roles FOREIGN KEY (ApproverRoleId) REFERENCES dbo.Roles(RoleId),
     CONSTRAINT CK_ApprovalSteps_Status CHECK (Status IN ('pending', 'approved', 'rejected', 'skipped'))
+);
+
+CREATE TABLE dbo.ApprovalActions (
+    ApprovalActionId BIGINT IDENTITY(1,1) PRIMARY KEY,
+    ApprovalRequestId BIGINT NOT NULL,
+    StepNo INT NOT NULL,
+    ActionBy INT NOT NULL,
+    Action NVARCHAR(30) NOT NULL,
+    ActionAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    Comments NVARCHAR(1000) NULL,
+    CONSTRAINT FK_ApprovalActions_Requests FOREIGN KEY (ApprovalRequestId) REFERENCES dbo.ApprovalRequests(ApprovalRequestId),
+    CONSTRAINT FK_ApprovalActions_Users FOREIGN KEY (ActionBy) REFERENCES dbo.Users(UserId),
+    CONSTRAINT CK_ApprovalActions_Action CHECK (Action IN ('submitted', 'approved', 'rejected', 'cancelled'))
+);
+
+CREATE TABLE dbo.SalesOrderPricingLogs (
+    SalesOrderPricingLogId BIGINT IDENTITY(1,1) PRIMARY KEY,
+
+    SalesOrderId INT NOT NULL,
+    SalesOrderLineId INT NOT NULL,
+
+    PricingSequenceId INT NULL,
+
+    PricingSourceCode NVARCHAR(40) NULL,
+
+    PricingReferenceTable NVARCHAR(100) NULL,
+    PricingReferenceId INT NULL,
+
+    PricingMethod NVARCHAR(40) NULL,
+
+    BaseAmount DECIMAL(18,4) NULL,
+    AdjustmentAmount DECIMAL(18,4) NULL,
+    ResultAmount DECIMAL(18,4) NULL,
+
+    Description NVARCHAR(500) NULL,
+
+    CreatedAt DATETIME2 NOT NULL
+        CONSTRAINT DF_SalesOrderPricingLogs_CreatedAt
+        DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT FK_SalesOrderPricingLogs_SalesOrders FOREIGN KEY (SalesOrderId) REFERENCES dbo.SalesOrders(SalesOrderId),
+    CONSTRAINT FK_SalesOrderPricingLogs_SalesOrderLines FOREIGN KEY (SalesOrderLineId) REFERENCES dbo.SalesOrderLines(SalesOrderLineId),
+    CONSTRAINT FK_SalesOrderPricingLogs_PricingSources FOREIGN KEY (PricingSourceCode) REFERENCES dbo.PricingSources(PricingSourceCode)
+);
+
+CREATE NONCLUSTERED INDEX IX_SalesOrderPricingLogs_Line
+ON dbo.SalesOrderPricingLogs
+(
+    SalesOrderLineId,
+    CreatedAt
 );
 
 CREATE INDEX IX_SalesOrders_Customer_Status ON dbo.SalesOrders(CustomerId, Status);
@@ -1058,13 +1579,39 @@ CREATE INDEX IX_ProductionOrders_Item_Status ON dbo.ProductionOrders(FinishedGoo
 CREATE INDEX IX_QualityInspections_Item_Lot_Status ON dbo.QualityInspections(ItemId, LotId, Status);
 CREATE INDEX IX_SalesInvoices_Customer_Status ON dbo.SalesInvoices(CustomerId, Status);
 CREATE INDEX IX_PurchaseInvoices_Vendor_Status ON dbo.PurchaseInvoices(VendorId, Status);
+CREATE INDEX IX_GoodsIssues_Search ON dbo.GoodsIssues(Status, RequestDate, GoodsIssueTypeId, CustomerId);
+CREATE INDEX IX_GoodsIssueLines_Item ON dbo.GoodsIssueLines(ItemId, ProductTypeId, ThicknessId);
+CREATE INDEX IX_GoodsReceipts_Search ON dbo.GoodsReceipts(Status, ReceiptDate, GoodsReceiptTypeId, VendorId, ProductionOrderId);
+CREATE INDEX IX_GoodsReceiptLines_Item ON dbo.GoodsReceiptLines(ItemId, ProductTypeId, ThicknessId);
 CREATE INDEX IX_InventoryCostLayers_Item_Remaining ON dbo.InventoryCostLayers(ItemId, WarehouseId, QuantityRemaining);
 CREATE INDEX IX_DocumentStatusHistory_Document ON dbo.DocumentStatusHistory(DocumentType, DocumentId, ChangedAt);
 CREATE INDEX IX_ApprovalRequests_Document ON dbo.ApprovalRequests(DocumentType, DocumentId, Status);
 CREATE INDEX IX_ApprovalSteps_Request_Status ON dbo.ApprovalSteps(ApprovalRequestId, Status);
+CREATE NONCLUSTERED INDEX IX_PriceListItems_Lookup ON dbo.PriceListItems
+(
+    PriceListId,
+    ItemId,
+    UnitId,
+    MinQuantity,
+    EffectiveFrom,
+    EffectiveTo
+);
+CREATE NONCLUSTERED INDEX IX_ContractLines_Lookup ON dbo.CustomerPriceContractLines
+(
+    CustomerPriceContractId,
+    ItemId,
+    UnitId,
+    MinQuantity
+);
+CREATE NONCLUSTERED INDEX IX_DiscountRules_Apply ON dbo.DiscountRules
+(
+    ApplyLevel,
+    Priority,
+    IsActive
+);
 
 INSERT INTO dbo.Roles (RoleCode, RoleName)
-VALUES ('admin', 'Administrator'), ('accounting', 'Accounting'), ('user', 'User'), ('audit', 'Audit');
+VALUES ('admin', 'Administrator'), ('accounting', 'Accounting'), ('user', 'User'), ('audit', 'Audit'), ('wms', 'WMS Operator');
 
 INSERT INTO dbo.Companies (CompanyCode, CompanyName)
 VALUES ('AGROFIBER', N'Agrofiber');
@@ -1076,48 +1623,114 @@ WHERE CompanyCode = 'AGROFIBER';
 
 INSERT INTO dbo.DocumentStatuses (DocumentType, StatusCode, StatusName, IsTerminal, SortOrder)
 VALUES
-    ('quotation', 'draft', N'ร่าง', 0, 10),
-    ('quotation', 'approved', N'อนุมัติ', 0, 20),
-    ('quotation', 'rejected', N'ไม่อนุมัติ', 1, 30),
-    ('quotation', 'closed', N'ปิดเอกสาร', 1, 40),
-    ('sales_order', 'draft', N'ร่าง', 0, 10),
-    ('sales_order', 'confirmed', N'ยืนยัน', 0, 20),
-    ('sales_order', 'partial_delivered', N'ส่งบางส่วน', 0, 30),
-    ('sales_order', 'closed', N'ปิดเอกสาร', 1, 40),
-    ('purchase_order', 'draft', N'ร่าง', 0, 10),
-    ('purchase_order', 'approved', N'อนุมัติ', 0, 20),
-    ('purchase_order', 'closed', N'ปิดเอกสาร', 1, 30),
-    ('delivery_order', 'draft', N'ร่าง', 0, 10),
-    ('delivery_order', 'shipped', N'ส่งสินค้าแล้ว', 0, 20),
-    ('delivery_order', 'closed', N'ปิดเอกสาร', 1, 30),
-    ('production_order', 'draft', N'ร่าง', 0, 10),
-    ('production_order', 'released', N'ปล่อยผลิต', 0, 20),
-    ('production_order', 'in_process', N'กำลังผลิต', 0, 30),
-    ('production_order', 'completed', N'ผลิตเสร็จ', 1, 40),
-    ('invoice', 'draft', N'ร่าง', 0, 10),
-    ('invoice', 'posted', N'ลงบัญชีแล้ว', 0, 20),
-    ('invoice', 'paid', N'ชำระแล้ว', 1, 30),
-    ('invoice', 'cancelled', N'ยกเลิก', 1, 40);
+    ('QT', 'draft', N'ร่าง', 0, 10),
+    ('QT', 'requested', N'รออนุมัติ', 0, 20),
+    ('QT', 'approved', N'อนุมัติ', 0, 30),
+    ('QT', 'rejected', N'ไม่อนุมัติ', 1, 40),
+    ('QT', 'closed', N'ปิดเอกสาร', 1, 50),
+
+    ('SO', 'draft', N'ร่าง', 0, 10),
+    ('SO', 'requested', N'รออนุมัติ', 0, 20),
+    ('SO', 'approved', N'อนุมัติ', 0, 30),
+    ('SO', 'rejected', N'ไม่อนุมัติ', 1, 35),
+    ('SO', 'confirmed', N'ยืนยัน', 0, 40),
+    ('SO', 'partial_delivered', N'ส่งบางส่วน', 0, 50),
+    ('SO', 'closed', N'ปิดเอกสาร', 1, 60),
+
+    ('PO', 'draft', N'ร่าง', 0, 10),
+    ('PO', 'requested', N'รออนุมัติ', 0, 20),
+    ('PO', 'approved', N'อนุมัติ', 0, 30),
+    ('PO', 'closed', N'ปิดเอกสาร', 1, 40),
+
+    ('DO', 'draft', N'ร่าง', 0, 10),
+    ('DO', 'shipped', N'ส่งสินค้าแล้ว', 0, 20),
+    ('DO', 'closed', N'ปิดเอกสาร', 1, 30),
+
+    ('GI', 'draft', N'ร่าง', 0, 10),
+    ('GI', 'requested', N'รออนุมัติ', 0, 20),
+    ('GI', 'approved', N'อนุมัติ', 0, 30),
+    ('GI', 'issued', N'เบิกแล้ว', 1, 40),
+    ('GI', 'cancelled', N'ยกเลิก', 1, 50),
+
+    ('GR', 'draft', N'ร่าง', 0, 10),
+    ('GR', 'received', N'รับแล้ว', 0, 20),
+    ('GR', 'posted', N'ลงคลังแล้ว', 1, 30),
+    ('GR', 'cancelled', N'ยกเลิก', 1, 40),
+
+    ('MO', 'draft', N'ร่าง', 0, 10),
+    ('MO', 'requested', N'รออนุมัติ', 0, 20),
+    ('MO', 'approved', N'อนุมัติ', 0, 30),
+    ('MO', 'released', N'ปล่อยผลิต', 0, 40),
+    ('MO', 'in_process', N'กำลังผลิต', 0, 50),
+    ('MO', 'completed', N'ผลิตเสร็จ', 1, 60),
+
+    ('INV', 'draft', N'ร่าง', 0, 10),
+    ('INV', 'posted', N'ลงบัญชีแล้ว', 0, 20),
+    ('INV', 'paid', N'ชำระแล้ว', 1, 30),
+    ('INV', 'cancelled', N'ยกเลิก', 1, 40),
+
+    ('PINV', 'draft', N'ร่าง', 0, 10),
+    ('PINV', 'posted', N'ลงบัญชีแล้ว', 0, 20),
+    ('PINV', 'paid', N'ชำระแล้ว', 1, 30),
+    ('PINV', 'cancelled', N'ยกเลิก', 1, 40),
+
+    ('RCPT', 'draft', N'ร่าง', 0, 10),
+    ('RCPT', 'posted', N'ลงบัญชีแล้ว', 0, 20),
+    ('RCPT', 'cancelled', N'ยกเลิก', 1, 30),
+
+    ('VPAY', 'draft', N'ร่าง', 0, 10),
+    ('VPAY', 'posted', N'ลงบัญชีแล้ว', 0, 20),
+    ('VPAY', 'cancelled', N'ยกเลิก', 1, 30),
+
+    ('ITEM_PRICING_POLICY', 'draft', N'ร่าง', 0, 10),
+    ('ITEM_PRICING_POLICY', 'requested', N'รออนุมัติ', 0, 20),
+    ('ITEM_PRICING_POLICY', 'approved', N'อนุมัติ', 0, 30),
+    ('ITEM_PRICING_POLICY', 'rejected', N'ไม่อนุมัติ', 1, 40);
 
 INSERT INTO dbo.DocumentSeries (DocumentType, SeriesCode, BranchId, PrefixFormat, PaddingLength, ResetFrequency)
 SELECT v.DocumentType, v.SeriesCode, b.BranchId, v.PrefixFormat, 4, 'yearly'
 FROM dbo.Branches b
 CROSS JOIN (
     VALUES
-        ('quotation', 'QT', 'QT-{yyyy}-'),
-        ('sales_order', 'SO', 'SO-{yyyy}-'),
-        ('purchase_order', 'PO', 'PO-{yyyy}-'),
-        ('delivery_order', 'DO', 'DO-{yyyy}-'),
-        ('production_order', 'MO', 'MO-{yyyy}-'),
-        ('sales_invoice', 'INV', 'INV-{yyyy}-'),
-        ('purchase_invoice', 'PINV', 'PINV-{yyyy}-'),
-        ('customer_payment', 'RCPT', 'RCPT-{yyyy}-'),
-        ('vendor_payment', 'VPAY', 'VPAY-{yyyy}-')
+        ('QT', 'QT', 'QT-{yyyy}-'),
+        ('SO', 'SO', 'SO-{yyyy}-'),
+        ('PO', 'PO', 'PO-{yyyy}-'),
+        ('DO', 'DO', 'DO-{yyyy}-'),
+        ('GI', 'GI', 'GI-{yyyy}-'),
+        ('GR', 'GR', 'GR-{yyyy}-'),
+        ('MO', 'MO', 'MO-{yyyy}-'),
+        ('INV', 'INV', 'INV-{yyyy}-'),
+        ('PINV', 'PINV', 'PINV-{yyyy}-'),
+        ('RCPT', 'RCPT', 'RCPT-{yyyy}-'),
+        ('VPAY', 'VPAY', 'VPAY-{yyyy}-')
 ) v(DocumentType, SeriesCode, PrefixFormat)
 WHERE b.BranchCode = 'HO';
 
+INSERT INTO dbo.WorkflowDefinitions (WorkflowCode, WorkflowName, DocumentType, IsActive)
+VALUES
+    ('WF_ITEM_PRICING_POLICY', N'Workflow: Item Pricing Policy Approval', 'ITEM_PRICING_POLICY', 1);
+
+INSERT INTO dbo.WorkflowSteps (WorkflowDefinitionId, StepNo, ApprovalType, ApproverRoleId, ApproverUserId, IsRequired)
+SELECT
+    wd.WorkflowDefinitionId,
+    v.StepNo,
+    'sequential',
+    r.RoleId,
+    NULL,
+    1
+FROM dbo.WorkflowDefinitions wd
+JOIN dbo.Roles r ON r.RoleCode = v.RoleCode
+CROSS JOIN (
+    VALUES
+        (1, 'accounting'),
+        (2, 'admin')
+) v(StepNo, RoleCode)
+WHERE wd.WorkflowCode = 'WF_ITEM_PRICING_POLICY';
+
 INSERT INTO dbo.StockMovementTypes (MovementTypeCode, MovementTypeName, Direction)
 VALUES
+    ('goods_receipt', N'รับสินค้าเข้า', 'in'),
+    ('goods_issue', N'เบิกสินค้าออก', 'out'),
     ('purchase_receipt', N'รับเข้าจากการซื้อ', 'in'),
     ('production_issue', N'เบิกวัตถุดิบเข้าผลิต', 'out'),
     ('production_receipt', N'รับเข้าสินค้าจากการผลิต', 'in'),
@@ -1125,6 +1738,25 @@ VALUES
     ('transfer', N'โอนย้ายคลัง/ตำแหน่งจัดเก็บ', 'transfer'),
     ('adjustment_in', N'ปรับปรุงรับเข้า', 'adjustment'),
     ('adjustment_out', N'ปรับปรุงตัดออก', 'adjustment');
+
+INSERT INTO dbo.GoodsIssueTypes (GoodsIssueTypeCode, GoodsIssueTypeName, MovementTypeCode, RequiresCustomer, RequiresApproval)
+VALUES
+    ('FOR_SALE', N'เพื่อขาย', 'goods_issue', 1, 0),
+    ('EXPORT_SALE', N'เพื่อขาย EX', 'goods_issue', 1, 0),
+    ('CNC_PICK', N'เบิกเซาะ CNC', 'goods_issue', 0, 0),
+    ('CUTTING_PICK', N'เบิกตัด', 'goods_issue', 0, 0),
+    ('REPAIR_PICK', N'เบิกซ่อม', 'goods_issue', 0, 1),
+    ('OLD_STOCK_PICK', N'เบิกทึบเก่า', 'goods_issue', 0, 1),
+    ('OTHER_PICK', N'เบิกอื่นๆ', 'goods_issue', 0, 1);
+
+INSERT INTO dbo.GoodsReceiptTypes (GoodsReceiptTypeCode, GoodsReceiptTypeName, MovementTypeCode, RequiresVendor, RequiresProductionOrder, RequiresApproval)
+VALUES
+    ('PURCHASE_RECEIVE', N'รับจากการซื้อ', 'goods_receipt', 1, 0, 0),
+    ('PRODUCTION_RECEIVE', N'รับจากการผลิต', 'goods_receipt', 0, 1, 0),
+    ('GENERAL_RECEIVE', N'รับเข้าทั่วไป', 'goods_receipt', 0, 0, 0),
+    ('RETURN_RECEIVE', N'รับคืนจากลูกค้า', 'goods_receipt', 0, 0, 1),
+    ('ADJUSTMENT_RECEIVE', N'รับเข้าปรับปรุง', 'goods_receipt', 0, 0, 1),
+    ('TRANSFER_RECEIVE', N'รับจากการโอนย้าย', 'goods_receipt', 0, 0, 0);
 
 INSERT INTO dbo.WmsTaskTypes (TaskTypeCode, TaskTypeName)
 VALUES
@@ -1152,7 +1784,10 @@ VALUES
     ('FIXED_PRICE', N'Fixed Price', N'ใช้ราคาขายมาตรฐานของสินค้า หรือราคาที่กำหนดไว้ใน price list/สัญญา'),
     ('COST_PLUS', N'Cost Plus', N'คำนวณราคาขายจากต้นทุนสินค้า บวก markup ตามเปอร์เซ็นต์ที่กำหนด'),
     ('MARGIN_BASED', N'Margin Based', N'คำนวณราคาขายจากต้นทุนสินค้า เพื่อให้ได้ margin ตามเปอร์เซ็นต์เป้าหมาย'),
-    ('LOT_BASED', N'Lot-Based', N'กำหนดราคาตาม lot/batch โดยอ้างอิงต้นทุนหรือราคาของ lot นั้น');
+    ('LOT_BASED', N'Lot-Based', N'กำหนดราคาตาม lot/batch โดยอ้างอิงต้นทุนหรือราคาของ lot นั้น'),
+    ('DISCOUNT_PERCENT', N'Discount Percent', N'คำนวณราคาขายโดยลดจากราคามาตรฐานตามเปอร์เซ็นต์ที่กำหนด'),
+    ('DISCOUNT_AMOUNT', N'Discount Amount', N'คำนวณราคาขายโดยลดจากราคามาตรฐานตามจำนวนที่กำหนด')
+    ;
 
 INSERT INTO dbo.ProductTypes (ProductTypeCode, ProductTypeName)
 VALUES ('MDF', N'MDF'), ('HMR', N'HMR'), ('PB', N'Particle Board'), ('PLYWOOD', N'Plywood');
@@ -1238,4 +1873,81 @@ JOIN dbo.PricingMethods pm ON pm.PricingMethodId = ipp.PricingMethodId
 WHERE ipp.IsActive = 1
   AND CAST(SYSUTCDATETIME() AS DATE) >= ipp.EffectiveFrom
   AND (ipp.EffectiveTo IS NULL OR CAST(SYSUTCDATETIME() AS DATE) <= ipp.EffectiveTo);
+GO
+
+CREATE VIEW dbo.vw_GoodsIssueList AS
+SELECT
+    gi.GoodsIssueId,
+    gi.DocumentNo AS IssueNumber,
+    gi.Status,
+    gi.RequestDate,
+    git.GoodsIssueTypeCode,
+    git.GoodsIssueTypeName,
+    c.CustomerCode,
+    c.CustomerName,
+    gil.LineNum,
+    i.ItemCode AS MatCode,
+    i.ItemName,
+    pt.ProductTypeCode,
+    pt.ProductTypeName,
+    th.ThicknessMm,
+    gil.PalletCount,
+    gil.LimitSheetQty,
+    gil.RequestedSheetQty,
+    gil.IssuedSheetQty,
+    gil.M3Quantity,
+    gil.Remark
+FROM dbo.GoodsIssues gi
+JOIN dbo.GoodsIssueTypes git ON git.GoodsIssueTypeId = gi.GoodsIssueTypeId
+JOIN dbo.GoodsIssueLines gil ON gil.GoodsIssueId = gi.GoodsIssueId
+JOIN dbo.Items i ON i.ItemId = gil.ItemId
+LEFT JOIN dbo.Customers c ON c.CustomerId = gi.CustomerId
+LEFT JOIN dbo.ProductTypes pt ON pt.ProductTypeId = COALESCE(gil.ProductTypeId, i.ProductTypeId)
+LEFT JOIN dbo.ItemThicknesses th ON th.ThicknessId = COALESCE(gil.ThicknessId, i.ThicknessId);
+GO
+
+CREATE VIEW dbo.vw_GoodsReceiptList AS
+SELECT
+    gr.GoodsReceiptId,
+    gr.DocumentNo AS ReceiptNumber,
+    gr.Status,
+    gr.ReceiptDate,
+    grt.GoodsReceiptTypeCode,
+    grt.GoodsReceiptTypeName,
+    v.VendorCode,
+    v.VendorName,
+    c.CustomerCode,
+    c.CustomerName,
+    grl.LineNum,
+    i.ItemCode AS MatCode,
+    i.ItemName,
+    pt.ProductTypeCode,
+    pt.ProductTypeName,
+    th.ThicknessMm,
+    grl.PalletCount,
+    grl.ReceivedSheetQty,
+    grl.M3Quantity,
+    grl.LotNo,
+    grl.Remark
+FROM dbo.GoodsReceipts gr
+JOIN dbo.GoodsReceiptTypes grt ON grt.GoodsReceiptTypeId = gr.GoodsReceiptTypeId
+JOIN dbo.GoodsReceiptLines grl ON grl.GoodsReceiptId = gr.GoodsReceiptId
+JOIN dbo.Items i ON i.ItemId = grl.ItemId
+LEFT JOIN dbo.Vendors v ON v.VendorId = gr.VendorId
+LEFT JOIN dbo.Customers c ON c.CustomerId = gr.CustomerId
+LEFT JOIN dbo.ProductTypes pt ON pt.ProductTypeId = COALESCE(grl.ProductTypeId, i.ProductTypeId)
+LEFT JOIN dbo.ItemThicknesses th ON th.ThicknessId = COALESCE(grl.ThicknessId, i.ThicknessId);
+GO
+
+CREATE TABLE dbo.QuotationAttachments (
+    QuotationAttachmentId INT IDENTITY(1,1) PRIMARY KEY,
+    QuotationId INT NOT NULL,
+    FileName NVARCHAR(255) NOT NULL,
+    FilePath NVARCHAR(500) NOT NULL,
+    FileSize INT NULL,
+    UploadedBy INT NOT NULL,
+    UploadedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT FK_QuotationAttachments_Quotations FOREIGN KEY (QuotationId) REFERENCES dbo.Quotations(QuotationId),
+    CONSTRAINT FK_QuotationAttachments_UploadedBy FOREIGN KEY (UploadedBy) REFERENCES dbo.Users(UserId)
+);
 GO

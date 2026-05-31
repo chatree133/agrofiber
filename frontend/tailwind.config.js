@@ -8,7 +8,7 @@ export default {
       },
       colors: {
         ink: '#071d2c',
-        brand: '#1f86f6',
+        brand: '#0b733e',
       },
     },
   },

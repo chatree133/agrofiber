@@ -1,5 +1,5 @@
 import { LockOutlined, UserOutlined } from '@ant-design/icons';
-import { Button, Card, Form, Input } from 'antd';
+import { Button, Card, Form, Input, message } from 'antd';
 import { useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -8,14 +8,20 @@ export default function Login() {
   const navigate = useNavigate();
   const { token, login } = useAuth();
   const [loading, setLoading] = useState(false);
+  const [form] = Form.useForm();
 
   if (token) return <Navigate to="/dashboard" replace />;
 
   const onFinish = async (values) => {
     setLoading(true);
-    await login(values.username, values.password);
-    setLoading(false);
-    navigate('/dashboard');
+    try {
+      await login(values.username, values.password);
+      navigate('/dashboard');
+    } catch (error) {
+      message.error(error?.message || 'เข้าสู่ระบบไม่สำเร็จ');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -29,12 +35,16 @@ export default function Login() {
           <p className="mt-1 text-slate-500">เข้าสู่ระบบ ERP</p>
         </div>
 
-        <Form layout="vertical" onFinish={onFinish} initialValues={{ username: 'chatree', password: 'password' }}>
+        <Form form={form} layout="vertical" onFinish={onFinish}>
           <Form.Item name="username" label="Username" rules={[{ required: true }]}>
             <Input prefix={<UserOutlined />} size="large" />
           </Form.Item>
           <Form.Item name="password" label="Password" rules={[{ required: true }]}>
-            <Input.Password prefix={<LockOutlined />} size="large" />
+            <Input.Password
+              prefix={<LockOutlined />}
+              size="large"
+              onPressEnter={() => form.submit()}
+            />
           </Form.Item>
           <Button type="primary" htmlType="submit" size="large" block loading={loading}>
             เข้าสู่ระบบ

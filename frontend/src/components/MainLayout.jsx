@@ -1,10 +1,12 @@
 import { Drawer, Layout } from 'antd';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import AppSidebar, { AppSidebarContent } from './AppSidebar.jsx';
+import { useLocation } from 'react-router-dom';
 import TopNav from './TopNav.jsx';
 
 export default function MainLayout() {
+  const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -16,6 +18,12 @@ export default function MainLayout() {
 
     setMobileMenuOpen(true);
   };
+
+  useEffect(() => {
+    if (location.pathname.includes('/document/print')) {
+      setCollapsed(true);
+    }
+  }, []);
 
   return (
     <Layout className="min-h-screen">

@@ -1,32 +1,66 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { mssqlQuery, sql } from '../lib/mssql.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 
 const router = Router();
-
-const dummyUsers = [
-  {
-    id: 1,
-    username: 'chatree',
-    passwordHash: bcrypt.hashSync('password', 10),
-    name: 'Chatree Kueakachai',
-    roles: ['admin', 'accounting', 'user'],
-    avatarUrl: 'https://i.pravatar.cc/160?img=12',
-    favoriteMenus: ['/salesorder/create', '/inventory/stock'],
-  },
-];
 
 router.post(
   '/login',
   asyncHandler(async (req, res) => {
     const { username, password } = req.body;
-    const user = dummyUsers.find((entry) => entry.username === username);
 
-    if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+    if (!username || !password) {
+      res.status(400).json({ message: 'Username and password are required' });
+      return;
+    }
+
+    const rows = await mssqlQuery('DEFAULT', `
+        SELECT
+          u.UserId,
+          u.Username,
+          u.StaffId,
+          u.PasswordHash,
+          u.DisplayName,
+          u.JobTitle,
+          u.Email,
+          u.AvatarUrl,
+          u.IsActive,
+          r.RoleCode,
+          ufm.MenuKey
+        FROM dbo.Users u
+        LEFT JOIN dbo.UserRoles ur ON ur.UserId = u.UserId
+        LEFT JOIN dbo.Roles r ON r.RoleId = ur.RoleId
+        LEFT JOIN dbo.UserFavoriteMenus ufm ON ufm.UserId = u.UserId
+        WHERE u.Username = @login OR u.StaffId = @login
+      `, { inputs: { login: { type: sql.NVarChar(100), value: username } } });
+
+    const firstRow = rows[0];
+    if (!firstRow || !firstRow.IsActive || !(await bcrypt.compare(password, firstRow.PasswordHash))) {
       res.status(401).json({ message: 'Invalid username or password' });
       return;
     }
+
+    const roles = [...new Set(rows.map((row) => row.RoleCode).filter(Boolean))];
+    if (!roles.length) {
+      res.status(403).json({ message: 'User has no assigned roles' });
+      return;
+    }
+
+    const favoriteMenus = [...new Set(rows.map((row) => row.MenuKey).filter(Boolean))];
+    const user = {
+      id: firstRow.UserId,
+      username: firstRow.Username,
+      staffId: firstRow.StaffId,
+      name: firstRow.DisplayName,
+      displayName: firstRow.DisplayName,
+      jobTitle: firstRow.JobTitle,
+      email: firstRow.Email,
+      avatarUrl: firstRow.AvatarUrl,
+      roles,
+      favoriteMenus,
+    };
 
     const payload = {
       sub: user.id,
@@ -37,8 +71,7 @@ router.post(
       expiresIn: process.env.JWT_EXPIRES_IN || '8h',
     });
 
-    const { passwordHash, ...safeUser } = user;
-    res.json({ token, user: safeUser });
+    res.json({ token, user });
   }),
 );
 
