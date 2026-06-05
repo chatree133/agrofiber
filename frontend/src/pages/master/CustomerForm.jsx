@@ -5,6 +5,7 @@ import {
     SaveOutlined,
     FileExcelOutlined,
     SearchOutlined,
+    ArrowLeftOutlined,
 } from "@ant-design/icons";
 import {
     Button,
@@ -39,6 +40,7 @@ export default function CustomerForm() {
         createAddress,
         updateAddress,
         deleteAddress,
+        lookupPostalCode,
         getContacts,
         createContact,
         updateContact,
@@ -121,7 +123,7 @@ export default function CustomerForm() {
         } catch (err) {
             message.error(
                 err.response?.data?.message ||
-                    "ไม่สามารถโหลดข้อมูลบุคคลติดต่อได้",
+                "ไม่สามารถโหลดข้อมูลบุคคลติดต่อได้",
             );
         } finally {
             setLoadingContacts(false);
@@ -170,6 +172,31 @@ export default function CustomerForm() {
         setAddressModalOpen(false);
         addressForm.resetFields();
         setEditingAddress(null);
+    };
+
+    const handlePostalCodeChange = async (e) => {
+        const val = e.target.value.trim();
+        if (val.length === 5) {
+            try {
+                const data = await lookupPostalCode(val);
+                if (data) {
+                    addressForm.setFieldsValue({
+                        district: data.districtThai,
+                        province: data.provinceThai,
+                        districtId: data.districtId,
+                        provinceId: data.provinceId,
+                    });
+                }
+            } catch (err) {
+                console.error("Postal code lookup failed:", err);
+                addressForm.setFieldsValue({
+                    district: "",
+                    province: "",
+                    districtId: null,
+                    provinceId: null,
+                });
+            }
+        }
     };
 
     const handleSaveAddress = async () => {
@@ -485,7 +512,7 @@ export default function CustomerForm() {
                             >
                                 <Select
                                     options={lookups.customerSegments}
-                                    // defaultValue={1}
+                                // defaultValue={1}
                                 ></Select>
                             </Form.Item>
                             <Form.Item
@@ -631,15 +658,15 @@ export default function CustomerForm() {
     return (
         <div className="space-y-4">
             <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
-                <div>
-                    <h1 className="text-lg font-semibold text-slate-800">
-                        {isEdit ? "แก้ไขลูกค้า" : "เพิ่มลูกค้าใหม่"}
-                    </h1>
+                <div style={{ display: "flex", alignItems: "center" }}>
+                    <Button icon={<ArrowLeftOutlined />} onClick={() => navigate("/master/customers")} style={{ marginRight: "12px" }} />
+                    <div>
+                        <h1 className="text-lg font-semibold text-slate-800">
+                            {isEdit ? "แก้ไขลูกค้า" : "เพิ่มลูกค้าใหม่"}
+                        </h1>
+                    </div>
                 </div>
                 <Space>
-                    <Button onClick={() => navigate("/master/customers")}>
-                        ยกเลิก
-                    </Button>
                     <Button
                         type="primary"
                         icon={<SaveOutlined />}
@@ -745,15 +772,25 @@ export default function CustomerForm() {
                         />
                     </Form.Item>
                     <div className="grid grid-cols-1 gap-x-6 md:grid-cols-3">
+                        <Form.Item
+                            name="postalCode"
+                            label="รหัสไปรษณีย์"
+                            rules={[{ required: true, message: "กรุณากรอกรหัสไปรษณีย์" }]}
+                        >
+                            <Input
+                                placeholder="เช่น 50000"
+                                maxLength={5}
+                                onChange={handlePostalCodeChange}
+                            />
+                        </Form.Item>
                         <Form.Item name="district" label="เขต/อำเภอ">
-                            <Input placeholder="เช่น เมือง" />
+                            <Input readOnly placeholder="ดึงข้อมูลอัตโนมัติ" style={{ background: "#f5f5f5", color: "#595959" }} />
                         </Form.Item>
                         <Form.Item name="province" label="จังหวัด">
-                            <Input placeholder="เช่น เชียงใหม่" />
+                            <Input readOnly placeholder="ดึงข้อมูลอัตโนมัติ" style={{ background: "#f5f5f5", color: "#595959" }} />
                         </Form.Item>
-                        <Form.Item name="postalCode" label="รหัสไปรษณีย์">
-                            <Input placeholder="เช่น 50000" />
-                        </Form.Item>
+                        <Form.Item name="districtId" hidden><Input /></Form.Item>
+                        <Form.Item name="provinceId" hidden><Input /></Form.Item>
                     </div>
                     <div className="grid grid-cols-1 gap-x-6 md:grid-cols-2">
                         <Form.Item

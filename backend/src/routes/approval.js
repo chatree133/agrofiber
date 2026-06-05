@@ -25,9 +25,12 @@ function getUserId(req) {
 router.get('/', asyncHandler(async (req, res) => {
   const status = req.query.status || 'pending';
   const docType = req.query.documentType;
+  const userId = getUserId(req);
 
   const conditions = [];
-  const inputs = {};
+  const inputs = {
+    userId: { type: sql.Int, value: userId }
+  };
 
   if (status !== 'all') {
     conditions.push('ar.Status = @status');
@@ -36,6 +39,37 @@ router.get('/', asyncHandler(async (req, res) => {
   if (docType) {
     conditions.push('ar.DocumentType = @docType');
     inputs.docType = { type: sql.NVarChar(40), value: docType };
+  }
+
+  if (status === 'pending') {
+    // If pending, strictly filter to show only active steps matching the user (no need for global relevance filter since this is a subset)
+    conditions.push(`
+      EXISTS (
+        SELECT 1 FROM dbo.ApprovalSteps ast
+        WHERE ast.ApprovalRequestId = ar.ApprovalRequestId
+          AND ast.StepNo = ar.CurrentStepNo
+          AND ast.Status = 'pending'
+          AND (
+            ast.ApproverUserId = @userId
+            OR ast.ApproverRoleId IN (SELECT RoleId FROM dbo.UserRoles WHERE UserId = @userId)
+          )
+      )
+    `);
+  } else {
+    // If showing all or history, apply global relevance filter so they see their requested or participated approvals
+    conditions.push(`
+      (
+        ar.RequestedBy = @userId
+        OR EXISTS (
+          SELECT 1 FROM dbo.ApprovalSteps ast
+          WHERE ast.ApprovalRequestId = ar.ApprovalRequestId
+            AND (
+              ast.ApproverUserId = @userId
+              OR ast.ApproverRoleId IN (SELECT RoleId FROM dbo.UserRoles WHERE UserId = @userId)
+            )
+        )
+      )
+    `);
   }
 
   const whereSql = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -56,7 +90,17 @@ router.get('/', asyncHandler(async (req, res) => {
         so.DocumentNo, 
         ipv.VersionNo,
         CAST(ar.DocumentId AS NVARCHAR(50))
-      ) AS documentNo
+      ) AS documentNo,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM dbo.ApprovalSteps ast
+        WHERE ast.ApprovalRequestId = ar.ApprovalRequestId
+          AND ast.StepNo = ar.CurrentStepNo
+          AND ast.Status = 'pending'
+          AND (
+            ast.ApproverUserId = @userId
+            OR ast.ApproverRoleId IN (SELECT RoleId FROM dbo.UserRoles WHERE UserId = @userId)
+          )
+      ) THEN 1 ELSE 0 END AS isPendingForMe
     FROM dbo.ApprovalRequests ar
     JOIN dbo.Users u ON u.UserId = ar.RequestedBy
     LEFT JOIN dbo.Quotations qt ON ar.DocumentType = 'QT' AND qt.QuotationId = ar.DocumentId
@@ -66,7 +110,7 @@ router.get('/', asyncHandler(async (req, res) => {
     ORDER BY ar.RequestedAt DESC, ar.ApprovalRequestId DESC
   `, { inputs });
 
-  res.json({ data: rows });
+  res.json({ data: rows.map(r => ({ ...r, isPendingForMe: Boolean(r.isPendingForMe) })) });
 }));
 
 // 1. ดึงข้อมูล Request พร้อม Steps
@@ -170,6 +214,7 @@ router.post('/:id/action', asyncHandler(async (req, res) => {
       case 'ITEM_PRICING_POLICY_BULK':
         if (result.finalStatus === 'approved') {
           await pricingPolicyService.approveVersion(result.documentId, userId);
+          await pricingPolicyService.publishVersion(result.documentId, userId);
         } else {
           await pricingPolicyService.rejectVersion(result.documentId, userId);
         }

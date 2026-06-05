@@ -8,6 +8,12 @@ import { CompanyProvider } from './CompanyContext.jsx';
 import { CustomerProvider } from './CustomerContext.jsx';
 import { QuotationProvider } from './QuotationContext.jsx';
 import { SalesOrderProvider } from './SalesOrderContext.jsx';
+import { DeliveryOrderProvider } from './DeliveryOrderContext.jsx';
+import { WmsProvider } from './WmsContext.jsx';
+import { GoodsIssueProvider } from './GoodsIssueContext.jsx';
+import { GoodsReceiptProvider } from './GoodsReceiptContext.jsx';
+import { PurchaseOrderProvider } from './PurchaseOrderContext.jsx';
+import { VendorProvider } from './VendorContext.jsx';
 
 // Compose helper to recursively wrap providers in correct order (leftmost = outermost)
 const composeProviders = (...providers) => {
@@ -29,5 +35,11 @@ export const AppProviders = composeProviders(
   CompanyProvider,
   CustomerProvider,
   QuotationProvider,
-  SalesOrderProvider
+  SalesOrderProvider,
+  DeliveryOrderProvider,
+  WmsProvider,
+  GoodsIssueProvider,
+  GoodsReceiptProvider,
+  PurchaseOrderProvider,
+  VendorProvider
 );

@@ -12,9 +12,9 @@ export function SalesOrderProvider({ children }) {
     return res.data;
   };
 
-  const getPriceLookup = async (customerId, itemId, unitId) => {
+  const getPriceLookup = async (customerId, itemId, unitId, itemSpecId = null) => {
     const res = await ApiClient.get(`/api/quotations/price-lookup`, {
-      params: { customerId, itemId, unitId },
+      params: { customerId, itemId, unitId, itemSpecId },
       headers: authHeaders
     });
     return res.data;
@@ -47,6 +47,16 @@ export function SalesOrderProvider({ children }) {
     return res.data;
   };
 
+  const updateSalesOrder = async (id, payload) => {
+    const res = await ApiClient.put(`/api/sale-orders/${id}`, payload, { headers: authHeaders });
+    return res.data;
+  };
+
+  const requestApproval = async (id, steps = []) => {
+    const res = await ApiClient.post(`/api/sale-orders/${id}/request-approval`, { steps }, { headers: authHeaders });
+    return res.data;
+  };
+
   const getSalesOrders = async (params = {}) => {
     const res = await ApiClient.get('/api/sale-orders', { headers: authHeaders, params });
     return res;
@@ -64,6 +74,8 @@ export function SalesOrderProvider({ children }) {
     getCustomerHistory,
     getSalesOrderDetail,
     createSalesOrder,
+    updateSalesOrder,
+    requestApproval,
     getSalesOrders,
     cancelSalesOrder
   }), [authHeaders]);

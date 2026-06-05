@@ -211,6 +211,7 @@ export const approvalService = {
       auditReq.input('reqId', sql.BigInt, requestId);
       auditReq.input('stepNo', sql.Int, request.CurrentStepNo);
       auditReq.input('actionBy', sql.Int, approverUserId);
+      auditReq.input('action', sql.NVarChar(30), action);
       auditReq.input('comments', sql.NVarChar(1000), comments || null);
       await auditReq.query(`
         INSERT INTO dbo.ApprovalActions (ApprovalRequestId, StepNo, ActionBy, Action, Comments)
@@ -286,10 +287,17 @@ export const approvalService = {
         s.ApprovalStepId, s.StepNo, 
         s.ApproverUserId, u.DisplayName AS ApproverDisplayName,
         s.ApproverRoleId, r.RoleName AS ApproverRoleName,
-        s.Status, s.ActionAt, s.Comments
+        s.Status, s.ActionAt, s.Comments,
+        act.ActionBy AS ActorUserId,
+        actor.DisplayName AS ActorDisplayName,
+        actor.AvatarUrl AS ActorAvatarUrl
       FROM dbo.ApprovalSteps s
       LEFT JOIN dbo.Users u ON u.UserId = s.ApproverUserId
       LEFT JOIN dbo.Roles r ON r.RoleId = s.ApproverRoleId
+      LEFT JOIN dbo.ApprovalActions act ON act.ApprovalRequestId = s.ApprovalRequestId 
+        AND act.StepNo = s.StepNo 
+        AND act.Action = s.Status
+      LEFT JOIN dbo.Users actor ON actor.UserId = act.ActionBy
       WHERE s.ApprovalRequestId = @reqId
       ORDER BY s.StepNo ASC
     `, { inputs: { reqId: { type: sql.BigInt, value: requestId } } });
@@ -313,7 +321,10 @@ export const approvalService = {
         approverRoleName: s.ApproverRoleName,
         status: s.Status,
         actionAt: s.ActionAt,
-        comments: s.Comments
+        comments: s.Comments,
+        actorUserId: s.ActorUserId,
+        actorDisplayName: s.ActorDisplayName,
+        actorAvatarUrl: s.ActorAvatarUrl
       }))
     };
   },
@@ -334,5 +345,25 @@ export const approvalService = {
 
     if (rows.length === 0) return null;
     return this.getRequestDetails(rows[0].ApprovalRequestId);
+  },
+
+  /**
+   * ยกเลิกคำขออนุมัติทั้งหมดของเอกสารที่กำลังรออนุมัติอยู่ (เปลี่ยน Status เป็น cancelled)
+   */
+  async cancelActiveRequests(documentType, documentId, tx = null) {
+    const execute = async (t) => {
+      const req = new sql.Request(t);
+      req.input('docType', sql.NVarChar(40), documentType);
+      req.input('docId', sql.Int, documentId);
+      await req.query(`
+        UPDATE dbo.ApprovalRequests
+        SET Status = 'cancelled'
+        WHERE DocumentType = @docType 
+          AND DocumentId = @docId 
+          AND Status = 'pending'
+      `);
+    };
+
+    return tx ? await execute(tx) : await mssqlTransaction('DEFAULT', execute);
   }
 };

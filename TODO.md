@@ -35,3 +35,31 @@
 - [ ] ถ้า optional: นิยามเงื่อนไข/สิทธิ์ที่ข้ามได้ (เช่น role ที่ create ได้เลย, หรือ flag/setting)
 - [ ] ออกแบบจุดบังคับใช้ใน backend (เช่น helper `ensureApprovalRequired(documentType, userRoleIds)` หรือ config table)
 - [ ] ให้สถานะเอกสาร/DocumentStatusHistory สอดคล้องกับ flow (draft/requested/approved/rejected/confirmed/closed)
+
+## Pricing: Add UnitId to ItemPricingPolicies & Bulk Excel Import (ภายหลัง)
+
+บริบท: ในอนาคตอาจมีแผนในการเพิ่มฟิลด์ `UnitId` ลงในตาราง `dbo.ItemPricingPolicies` ตั้งแต่แรกเริ่มสร้างนโยบายราคา เพื่อให้การควบคุมและกำหนดราคาสินค้ายืดหยุ่นตามหน่วยนับต่างๆ
+
+### งานที่ต้องทำ
+
+- [ ] ออกแบบการเพิ่มฟิลด์ `UnitId` ในตาราง `dbo.ItemPricingPolicies` และเพิ่ม Foreign Key เชื่อมกับตาราง `dbo.Units(UnitId)`
+- [ ] ปรับปรุงระบบการอัปโหลดข้อมูลนโยบายราคาผ่าน Excel (`POST /bulk/pricing-policies` ใน `backend/src/routes/items.js`) ให้รองรับการอัปโหลดหน่วยขาย (UoM) โดยตรงจาก Excel
+- [ ] รองรับการประมวลผลและการบันทึกข้อมูลตามรหัสหน่วยขายที่หลากหลาย เช่น:
+  - `REAM`
+  - `PALLET`
+  - `PCS`
+  - `SHEET`
+  - `SQM`
+  - `M3`
+- [ ] อัปเดตตรรกะการตรวจสอบและการนำส่งข้อมูลในขั้นตอนการแสดงผลและการคำนวณราคาขายตามหน่วยนับที่กำหนด
+
+## Sales Order Cancellation: Discuss with Accounting (ยังไม่ต้องทำปุ่มยกเลิกตอนนี้)
+
+บริบท: ต้องการรองรับการ "ยกเลิกใบสั่งขาย" (Cancel Sales Order) ในอนาคต แต่ยังไม่มีการทำปุ่มในตอนนี้
+
+### งานที่ต้องทำ
+
+- [ ] ตรวจสอบเงื่อนไขกับแผนกบัญชีก่อนว่า มีเงื่อนไขอะไรบ้างที่สามารถยกเลิกได้ และมีเงื่อนไขอะไรบ้างที่ไม่สามารถยกเลิกได้
+- [ ] สรุปกฎเกณฑ์และนำมาออกแบบจุดบังคับใช้ในระบบ (เช่น สถานะการออก DO, การออก Invoice, การจองสต็อก)
+
+

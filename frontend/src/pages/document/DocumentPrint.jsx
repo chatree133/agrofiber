@@ -7,11 +7,19 @@ import { useSalesOrder } from '../../context/SalesOrderContext';
 import QtDocumentTemplate from './templates/QtDocumentTemplate';
 import SoDocumentTemplate from './templates/SoDocumentTemplate';
 import CpoDocumentTemplate from './templates/CpoDocumentTemplate';
+import DoDocumentTemplate from './templates/DoDocumentTemplate';
+import InvDocumentTemplate from './templates/InvDocumentTemplate';
+import RcptDocumentTemplate from './templates/RcptDocumentTemplate';
+import CombinedBillingTemplate from './templates/CombinedBillingTemplate';
+import WavePrintTemplate from './templates/WavePrintTemplate';
+import LabelPrintTemplate from './templates/LabelPrintTemplate';
+import ApiClient from '../../context/Api.jsx';
 
 export default function DocumentPrint() {
   const [searchParams] = useSearchParams();
-  const formType = searchParams.get('form') || 'QT'; // 'QT', 'SO', or 'CPO'
+  const formType = searchParams.get('form') || 'QT'; // 'QT', 'SO', 'CPO', 'DO', 'INV', 'RCPT', or 'COMBINED'
   const docId = searchParams.get('docId');
+  const lineId = searchParams.get('lineId');
 
   const { getQuotationDetail } = useQuotation();
   const { getSalesOrderDetail } = useSalesOrder();
@@ -24,9 +32,23 @@ export default function DocumentPrint() {
   // Helper to determine document title in print metadata
   const getDocTitleForPrint = () => {
     if (!docData) return 'document';
-    const docNoRaw = docData.DocumentNo || docData.documentNo || '';
+    
+    if (formType === 'COMBINED') {
+      const doNo = docData.doData?.DocumentNo || docData.doData?.documentNo || '';
+      return `ชุดเอกสารส่งมอบและรับเงิน_${doNo}`;
+    }
+
+    const docNoRaw = docData.DocumentNo || docData.documentNo || docData.PaymentNo || docData.paymentNo || '';
     const docNo = formType === 'CPO' ? docNoRaw.replace(/^QT(\d*)-/, 'PO-C$1-') : docNoRaw;
-    const prefix = formType === 'QT' ? 'ใบเสนอราคา' : formType === 'SO' ? 'ใบสั่งขาย' : 'ใบสั่งซื้อ';
+    
+    let prefix = 'เอกสาร';
+    if (formType === 'QT') prefix = 'ใบเสนอราคา';
+    else if (formType === 'SO') prefix = 'ใบสั่งขาย';
+    else if (formType === 'CPO') prefix = 'ใบสั่งซื้อ';
+    else if (formType === 'DO') prefix = 'ใบส่งสินค้า';
+    else if (formType === 'INV') prefix = 'ใบกำกับภาษี';
+    else if (formType === 'RCPT') prefix = 'ใบเสร็จรับเงิน';
+    
     return `${prefix}_${docNo}`;
   };
 
@@ -49,6 +71,46 @@ export default function DocumentPrint() {
           res = await getQuotationDetail(docId);
         } else if (formType === 'SO') {
           res = await getSalesOrderDetail(docId);
+        } else if (formType === 'DO') {
+          const doRes = await ApiClient.get(`/api/delivery-orders/${docId}`);
+          res = doRes.data;
+        } else if (formType === 'INV') {
+          const invRes = await ApiClient.get(`/api/sales-invoices/${docId}`);
+          res = invRes.data;
+        } else if (formType === 'RCPT') {
+          const rcptRes = await ApiClient.get(`/api/customer-payments/${docId}`);
+          res = rcptRes.data;
+        } else if (formType === 'WAVE') {
+          const waveRes = await ApiClient.get(`/api/wms/waves/${docId}`);
+          res = waveRes.data;
+        } else if (formType === 'LABEL') {
+          const grRes = await ApiClient.get(`/api/goods-receipts/${docId}`);
+          res = grRes.data;
+        } else if (formType === 'COMBINED') {
+          // docId is the deliveryOrderId
+          // Fetch DO
+          const doRes = await ApiClient.get(`/api/delivery-orders/${docId}`);
+          const doData = doRes.data;
+
+          // Fetch Invoice
+          let invData = null;
+          const invListRes = await ApiClient.get('/api/sales-invoices', { deliveryOrderId: docId });
+          if (invListRes.data?.length > 0) {
+            const invDetailRes = await ApiClient.get(`/api/sales-invoices/${invListRes.data[0].id}`);
+            invData = invDetailRes.data;
+          }
+
+          // Fetch Receipt
+          let rcptData = null;
+          if (invData) {
+            const pmtListRes = await ApiClient.get('/api/customer-payments', { salesInvoiceId: invData.SalesInvoiceId || invData.id });
+            if (pmtListRes.data?.length > 0) {
+              const pmtDetailRes = await ApiClient.get(`/api/customer-payments/${pmtListRes.data[0].id}`);
+              rcptData = pmtDetailRes.data;
+            }
+          }
+
+          res = { doData, invData, rcptData };
         }
         setDocData(res);
       } catch (err) {
@@ -97,6 +159,18 @@ export default function DocumentPrint() {
         return <SoDocumentTemplate docData={docData} />;
       case 'CPO':
         return <CpoDocumentTemplate docData={docData} />;
+      case 'DO':
+        return <DoDocumentTemplate docData={docData} />;
+      case 'INV':
+        return <InvDocumentTemplate docData={docData} />;
+      case 'RCPT':
+        return <RcptDocumentTemplate docData={docData} />;
+      case 'WAVE':
+        return <WavePrintTemplate docData={docData} />;
+      case 'LABEL':
+        return <LabelPrintTemplate docData={docData} lineId={lineId} />;
+      case 'COMBINED':
+        return <CombinedBillingTemplate docData={docData} />;
       default:
         return <Empty description="ไม่พบรูปแบบฟอร์มสำหรับพิมพ์" />;
     }
@@ -120,10 +194,11 @@ export default function DocumentPrint() {
             max-width: 100% !important;
             box-shadow: none !important;
             border: none !important;
+            min-height: auto !important;
           }
           @page {
-            size: A4 portrait;
-            margin: 1.5cm;
+            size: ${formType === 'LABEL' ? 'auto' : 'A4 portrait'};
+            margin: ${formType === 'LABEL' ? '0.5cm' : '1.5cm'};
           }
         }
       ` }} />

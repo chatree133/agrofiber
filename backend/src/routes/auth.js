@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import bwipjs from 'bwip-js';
 import { mssqlQuery, sql } from '../lib/mssql.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 
@@ -78,5 +79,55 @@ router.post(
 router.post('/logout', (_req, res) => {
   res.status(204).send();
 });
+
+router.get(
+  '/barcode/:text',
+  asyncHandler(async (req, res) => {
+    const { text } = req.params;
+    if (!text) {
+      res.status(400).send('Text parameter is required');
+      return;
+    }
+
+    bwipjs.toBuffer({
+      bcid: 'code128',
+      text: text,
+      scale: 3,
+      height: 15,
+      includetext: false,
+    }, function (err, png) {
+      if (err) {
+        res.status(500).send(err.message || err);
+      } else {
+        res.type('png');
+        res.send(png);
+      }
+    });
+  })
+);
+
+router.get(
+  '/qrcode/:text',
+  asyncHandler(async (req, res) => {
+    const { text } = req.params;
+    if (!text) {
+      res.status(400).send('Text parameter is required');
+      return;
+    }
+
+    bwipjs.toBuffer({
+      bcid: 'qrcode',
+      text: text,
+      scale: 4,
+    }, function (err, png) {
+      if (err) {
+        res.status(500).send(err.message || err);
+      } else {
+        res.type('png');
+        res.send(png);
+      }
+    });
+  })
+);
 
 export default router;

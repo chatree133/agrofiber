@@ -19,7 +19,7 @@ export const postingService = {
       const headerReq = new sql.Request(tx);
       headerReq.input('grId', sql.Int, goodsReceiptId);
       const headerRes = await headerReq.query(`
-        SELECT GoodsReceiptId, Status, GoodsReceiptTypeId, ReceiptDate 
+        SELECT GoodsReceiptId, Status, GoodsReceiptTypeId, ReceiptDate, WarehouseId 
         FROM dbo.GoodsReceipts 
         WHERE GoodsReceiptId = @grId
       `);
@@ -146,8 +146,8 @@ export const postingService = {
     });
   },
 
-  async postGoodsIssue(goodsIssueId, userId) {
-    return mssqlTransaction('DEFAULT', async (tx) => {
+  async postGoodsIssue(goodsIssueId, userId, existingTx = null) {
+    const execute = async (tx) => {
       // 1. Get header
       const headerReq = new sql.Request(tx);
       headerReq.input('giId', sql.Int, goodsIssueId);
@@ -256,6 +256,12 @@ export const postingService = {
       `);
 
       return { success: true, message: 'Goods issue posted successfully' };
-    });
+    };
+
+    if (existingTx) {
+      return await execute(existingTx);
+    } else {
+      return await mssqlTransaction('DEFAULT', execute);
+    }
   }
 };

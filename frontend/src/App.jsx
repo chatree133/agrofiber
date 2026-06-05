@@ -24,6 +24,17 @@ import QuotationList from './pages/quotation/QuotationList.jsx';
 import StockCheck from './pages/inventory/StockCheck.jsx';
 import DocumentPrint from './pages/document/DocumentPrint.jsx';
 import ApprovalsDashboard from './pages/audit/ApprovalsDashboard.jsx';
+import PickingList from './pages/wms/PickingList.jsx';
+import WavePickingDetail from './pages/wms/WavePickingDetail.jsx';
+import DeliveryOrderList from './pages/deliveryorder/DeliveryOrderList.jsx';
+import DeliveryOrderDetail from './pages/deliveryorder/DeliveryOrderDetail.jsx';
+import GoodsIssueList from './pages/inventory/GoodsIssueList.jsx';
+import GoodsIssueForm from './pages/inventory/GoodsIssueForm.jsx';
+import GoodsIssueDetail from './pages/inventory/GoodsIssueDetail.jsx';
+import GoodsReceiptList from './pages/inventory/GoodsReceiptList.jsx';
+import GoodsReceiptForm from './pages/inventory/GoodsReceiptForm.jsx';
+import GoodsReceiptDetail from './pages/inventory/GoodsReceiptDetail.jsx';
+import TransactionTypes from './pages/master/TransactionTypes.jsx';
 
 function ProtectedRoute({ children }) {
   const { token } = useAuth();
@@ -62,8 +73,32 @@ function AppRoutes() {
         <Route path="quotation/create" element={<QuotationCreate />} />
         <Route path="quotation/list" element={<QuotationList />} />
         <Route path="inventory/stock-check" element={<StockCheck />} />
+        
+        {/* Goods Issue Routes */}
+        <Route path="inventory/goods-issues" element={<GoodsIssueList />} />
+        <Route path="inventory/goods-issues/create" element={<GoodsIssueForm />} />
+        <Route path="inventory/goods-issues/:id" element={<GoodsIssueDetail />} />
+        <Route path="inventory/goods-issues/:id/edit" element={<GoodsIssueForm />} />
+
+        {/* Goods Receipt Routes */}
+        <Route path="inventory/goods-receipts" element={<GoodsReceiptList />} />
+        <Route path="inventory/goods-receipts/create" element={<GoodsReceiptForm />} />
+        <Route path="inventory/goods-receipts/:id" element={<GoodsReceiptDetail />} />
+        <Route path="inventory/goods-receipts/:id/edit" element={<GoodsReceiptForm />} />
+
+        {/* Master Transaction Types */}
+        <Route path="master/transaction-types" element={<TransactionTypes />} />
+        
         <Route path="document/print" element={<DocumentPrint />} />
         <Route path="audit/approvals" element={<ApprovalsDashboard />} />
+        
+        {/* WMS Routes */}
+        <Route path="wms/picking" element={<PickingList />} />
+        <Route path="wms/waves/:id" element={<WavePickingDetail />} />
+        
+        {/* Delivery Order Routes */}
+        <Route path="deliveryorder/list" element={<DeliveryOrderList />} />
+        <Route path="deliveryorder/:id" element={<DeliveryOrderDetail />} />
         
         <Route path="settings/company" element={<CompanyList />} />
         <Route path="settings/company/create" element={<CompanyForm />} />

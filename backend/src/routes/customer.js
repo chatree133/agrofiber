@@ -59,6 +59,8 @@ function mapAddress(row) {
     addressLine2: row.AddressLine2,
     district: row.District,
     province: row.Province,
+    districtId: row.DistrictId,
+    provinceId: row.ProvinceId,
     postalCode: row.PostalCode,
     countryCode: row.CountryCode,
     isDefault: Boolean(row.IsDefault),
@@ -469,6 +471,8 @@ router.post(
       addressLine2 = null,
       district = null,
       province = null,
+      districtId = null,
+      provinceId = null,
       postalCode = null,
       countryCode = 'TH',
       isDefault = false,
@@ -522,6 +526,8 @@ router.post(
         .input('addressLine2', sql.NVarChar(500), addressLine2)
         .input('district', sql.NVarChar(100), district)
         .input('province', sql.NVarChar(100), province)
+        .input('districtId', sql.Int, districtId)
+        .input('provinceId', sql.Int, provinceId)
         .input('postalCode', sql.NVarChar(20), postalCode)
         .input('countryCode', sql.Char(2), countryCode)
         .input('isDefault', sql.Bit, parseBool(isDefault))
@@ -537,6 +543,8 @@ router.post(
             AddressLine2,
             District,
             Province,
+            DistrictId,
+            ProvinceId,
             PostalCode,
             CountryCode,
             IsDefault,
@@ -554,6 +562,8 @@ router.post(
             @addressLine2,
             @district,
             @province,
+            @districtId,
+            @provinceId,
             @postalCode,
             @countryCode,
             @isDefault,
@@ -594,6 +604,8 @@ router.put(
       ['addressLine2', 'AddressLine2', sql.NVarChar(500)],
       ['district', 'District', sql.NVarChar(100)],
       ['province', 'Province', sql.NVarChar(100)],
+      ['districtId', 'DistrictId', sql.Int],
+      ['provinceId', 'ProvinceId', sql.Int],
       ['postalCode', 'PostalCode', sql.NVarChar(20)],
       ['countryCode', 'CountryCode', sql.Char(2)],
       ['isDefault', 'IsDefault', sql.Bit],

@@ -6,6 +6,7 @@ import { sql, mssqlQuery, mssqlTransaction } from '../lib/mssql.js';
 import { documentService } from '../services/common/documentService.js';
 import { approvalService } from '../services/common/approvalService.js';
 import { quotationService } from '../services/sales/quotationService.js';
+import { pricingResolverService } from '../services/pricing/pricingResolverService.js';
 import fs from 'fs/promises';
 import crypto from 'crypto';
 import path from 'path';
@@ -168,38 +169,36 @@ router.get(
     const customerId = parseId(req.query.customerId, 'customerId');
     const itemId = parseId(req.query.itemId, 'itemId');
     const unitId = parseId(req.query.unitId, 'unitId');
+    const itemSpecId = parseOptionalId(req.query.itemSpecId, 'itemSpecId');
 
-    // 1. Find customer PriceListId
+    // 1. Retrieve Customer standard price configurations (PriceListId and CustomerPriceGroupId)
     const customerRes = await mssqlQuery('DEFAULT', `
-      SELECT PriceListId FROM dbo.Customers WHERE CustomerId = @customerId
+      SELECT PriceListId, CustomerPriceGroupId FROM dbo.Customers WHERE CustomerId = @customerId
     `, { inputs: { customerId: { type: sql.Int, value: customerId } } });
 
     let price = null;
     let pricingSource = 'Manual';
 
-    if (customerRes.length > 0 && customerRes[0].PriceListId) {
-      const priceListId = customerRes[0].PriceListId;
-      // Look up price in PriceListItems
-      const pliRes = await mssqlQuery('DEFAULT', `
-        SELECT TOP 1 UnitPrice 
-        FROM dbo.PriceListItems 
-        WHERE PriceListId = @priceListId 
-          AND ItemId = @itemId 
-          AND UnitId = @unitId 
-          AND IsActive = 1
-          AND EffectiveFrom <= CAST(SYSUTCDATETIME() AS DATE)
-          AND (EffectiveTo IS NULL OR EffectiveTo >= CAST(SYSUTCDATETIME() AS DATE))
-        ORDER BY EffectiveFrom DESC
-      `, {
-        inputs: {
-          priceListId: { type: sql.Int, value: priceListId },
-          itemId: { type: sql.Int, value: itemId },
-          unitId: { type: sql.Int, value: unitId },
+    if (customerRes.length > 0) {
+      const customer = customerRes[0];
+      const context = {
+        customerId,
+        itemId,
+        itemSpecId,
+        unitId,
+        quantity: 1,
+        documentDate: new Date(),
+        priceListId: customer.PriceListId,
+      };
+      try {
+        const basePrice = await pricingResolverService.resolveBasePrice(context);
+        console.log("basePrice", basePrice);
+        if (basePrice) {
+          price = basePrice.unitPrice;
+          pricingSource = basePrice.pricingSource;
         }
-      });
-      if (pliRes.length > 0) {
-        price = pliRes[0].UnitPrice;
-        pricingSource = 'CUSTOMER_PRICE_LIST';
+      } catch (err) {
+        // Standard pricing tables did not contain any matching record. Proceed to history lookup.
       }
     }
 
@@ -212,12 +211,17 @@ router.get(
         WHERE so.CustomerId = @customerId 
           AND sol.ItemId = @itemId 
           AND sol.UnitId = @unitId 
+          AND (
+            sol.ItemSpecId IS NULL AND @itemSpecId IS NULL
+            OR sol.ItemSpecId = @itemSpecId
+          )
           AND so.Status IN ('confirmed', 'approved')
         ORDER BY so.DocumentDate DESC, so.SalesOrderId DESC
       `, {
         inputs: {
           customerId: { type: sql.Int, value: customerId },
           itemId: { type: sql.Int, value: itemId },
+          itemSpecId: { type: sql.Int, value: itemSpecId },
           unitId: { type: sql.Int, value: unitId },
         }
       });
@@ -236,12 +240,17 @@ router.get(
         WHERE q.CustomerId = @customerId 
           AND ql.ItemId = @itemId 
           AND ql.UnitId = @unitId 
+          AND (
+            ql.ItemSpecId IS NULL AND @itemSpecId IS NULL
+            OR ql.ItemSpecId = @itemSpecId
+          )
           AND q.Status IN ('requested', 'approved')
         ORDER BY q.DocumentDate DESC, q.QuotationId DESC
       `, {
         inputs: {
           customerId: { type: sql.Int, value: customerId },
           itemId: { type: sql.Int, value: itemId },
+          itemSpecId: { type: sql.Int, value: itemSpecId },
           unitId: { type: sql.Int, value: unitId },
         }
       });
@@ -616,6 +625,9 @@ router.delete(
         INSERT INTO dbo.DocumentStatusHistory (DocumentType, DocumentId, ToStatus, ChangedBy, Notes)
         VALUES ('QT', @id, 'closed', @userId, 'Soft deleted (Closed)')
       `);
+
+      // 4. Cancel active approval requests
+      await approvalService.cancelActiveRequests('QT', qtId, tx);
     });
 
     res.json({ message: 'Quotation soft-deleted successfully' });

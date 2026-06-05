@@ -94,9 +94,10 @@ async function resolveSalesSku(tx, salesSkuRaw) {
     const req = new sql.Request(tx);
     req.input("salesSku", sql.NVarChar(100), salesSku);
     const res = await req.query(`
-      SELECT TOP 1 ItemId, ItemSpecId
-      FROM dbo.ItemSpecs
-      WHERE SalesSKU = @salesSku
+      SELECT TOP 1 s.ItemId, s.ItemSpecId, i.UnitId
+      FROM dbo.ItemSpecs s
+      JOIN dbo.Items i ON i.ItemId = s.ItemId
+      WHERE s.SalesSKU = @salesSku
     `);
     return res.recordset[0] || null;
 }
@@ -359,6 +360,13 @@ router.post(
 
         setImmediate(async () => {
             try {
+                // 0. Load Units lookup for mapping
+                const unitRows = await mssqlQuery('DEFAULT', `SELECT UnitId, UnitCode FROM dbo.Units`);
+                const unitMap = {};
+                unitRows.forEach(u => {
+                    unitMap[String(u.UnitCode).toUpperCase().trim()] = u.UnitId;
+                });
+
                 // 1. Create version header record in database
                 await mssqlTransaction("DEFAULT", async (tx) => {
                     const versionReq = new sql.Request(tx);
@@ -399,9 +407,14 @@ router.post(
                                         ? String(row.remark)
                                         : null;
 
+                            // Resolve unitId: map excel UnitCode to UnitId, fallback to default SKU unitId or 1
+                            const rawUnitCode = String(row?.unitCode ?? row?.UnitCode ?? row?.unit ?? row?.Unit ?? '').toUpperCase().trim();
+                            const unitId = unitMap[rawUnitCode] || resolved?.UnitId || 1;
+
                             const insertReq = new sql.Request(tx);
                             insertReq.input("itemId", sql.Int, itemId);
                             insertReq.input("itemSpecId", sql.Int, itemSpecId);
+                            insertReq.input("unitId", sql.Int, unitId);
                             insertReq.input(
                                 "pricingMethodId",
                                 sql.Int,
@@ -496,6 +509,7 @@ router.post(
                               INSERT INTO dbo.ItemPricingPolicies (
                                 ItemId,
                                 ItemSpecId,
+                                UnitId,
                                 PricingMethodId,
                                 Status,
                                 VersionNo,
@@ -516,6 +530,7 @@ router.post(
                               VALUES (
                                 @itemId,
                                 @itemSpecId,
+                                @unitId,
                                 @pricingMethodId,
                                 'draft',
                                 @versionNo,
@@ -656,6 +671,9 @@ router.get(
             SELECT
                 ipp.ItemPricingPolicyId,
                 ipp.ItemId,
+                ipp.UnitId,
+                unit.UnitCode,
+                unit.UnitName,
                 i.ItemCode,
                 i.ItemName,
                 ipp.ItemSpecId,
@@ -682,6 +700,7 @@ router.get(
                 ipp.CreatedAt
             FROM dbo.ItemPricingPolicies ipp
             JOIN dbo.PricingMethods pm ON pm.PricingMethodId = ipp.PricingMethodId
+            LEFT JOIN dbo.Units unit ON unit.UnitId = ipp.UnitId
             LEFT JOIN dbo.Items i ON i.ItemId = ipp.ItemId
             LEFT JOIN dbo.ItemSpecs ispec ON ispec.ItemSpecId = ipp.ItemSpecId
             LEFT JOIN dbo.Users u ON u.UserId = ipp.CreatedBy
@@ -700,6 +719,9 @@ router.get(
             return {
                 id: r.ItemPricingPolicyId,
                 itemId: r.ItemId,
+                unitId: r.UnitId,
+                unitCode: r.UnitCode,
+                unitName: r.UnitName,
                 itemCode: r.ItemCode,
                 itemName: r.ItemName,
                 itemSpecId: r.ItemSpecId,
@@ -1884,6 +1906,9 @@ router.get(
       SELECT
         ipp.ItemPricingPolicyId,
         ipp.ItemId,
+        ipp.UnitId,
+        unit.UnitCode,
+        unit.UnitName,
         ipp.ItemSpecId,
         ipp.PricingMethodId,
         pm.PricingMethodCode,
@@ -1907,6 +1932,7 @@ router.get(
         ipp.CreatedAt
       FROM dbo.ItemPricingPolicies ipp
       JOIN dbo.PricingMethods pm ON pm.PricingMethodId = ipp.PricingMethodId
+      LEFT JOIN dbo.Units unit ON unit.UnitId = ipp.UnitId
       WHERE ipp.ItemId = @itemId
       ORDER BY ipp.EffectiveFrom DESC, ipp.CreatedAt DESC
     `,
@@ -1917,6 +1943,9 @@ router.get(
             data: rows.map((r) => ({
                 id: r.ItemPricingPolicyId,
                 itemId: r.ItemId,
+                unitId: r.UnitId,
+                unitCode: r.UnitCode,
+                unitName: r.UnitName,
                 pricingMethodId: r.PricingMethodId,
                 pricingMethodCode: r.PricingMethodCode,
                 pricingMethodName: r.PricingMethodName,
@@ -1959,6 +1988,9 @@ router.get(
             data: {
                 id: policy.ItemPricingPolicyId,
                 itemId: policy.ItemId,
+                unitId: policy.UnitId,
+                unitCode: policy.UnitCode,
+                unitName: policy.UnitName,
                 itemSpecId: policy.ItemSpecId,
                 pricingMethodId: policy.PricingMethodId,
                 pricingMethodCode: policy.PricingMethodCode,
@@ -2033,11 +2065,27 @@ router.post(
         const standardCost =
             parseOptionalNumber(req.body.standardCost, "standardCost") ?? 0;
 
+        let unitId = parseOptionalId(req.body.unitId, "unitId");
+        if (!unitId) {
+            const itemRes = await mssqlQuery(
+                "DEFAULT",
+                "SELECT UnitId FROM dbo.Items WHERE ItemId = @itemId",
+                { inputs: { itemId: { type: sql.Int, value: itemId } } }
+            );
+            if (itemRes.length > 0) {
+                unitId = itemRes[0].UnitId;
+            }
+        }
+        if (!unitId) {
+            throw badRequest("unitId is required or could not be determined from the item.");
+        }
+
         const rows = await mssqlQuery(
             "DEFAULT",
             `
       INSERT INTO dbo.ItemPricingPolicies (
         ItemId,
+        UnitId,
         ItemSpecId,
         PricingMethodId,
         Status,
@@ -2059,6 +2107,7 @@ router.post(
       OUTPUT INSERTED.ItemPricingPolicyId
       VALUES (
         @itemId,
+        @unitId,
         @itemSpecId,
         @pricingMethodId,
         'draft',
@@ -2081,6 +2130,7 @@ router.post(
             {
                 inputs: {
                     itemId: { type: sql.Int, value: itemId },
+                    unitId: { type: sql.Int, value: unitId },
                     itemSpecId: {
                         type: sql.Int,
                         value: itemSpecId,
@@ -2580,6 +2630,129 @@ router.delete(
 
         res.json({ message: "Spec soft deleted successfully" });
     }),
+);
+
+// --- Price Lists & Price List Items Management ---
+router.get(
+    "/price-lists/list",
+    readRoles,
+    asyncHandler(async (req, res) => {
+        const rows = await mssqlQuery(
+            "DEFAULT",
+            `
+            SELECT 
+                pl.PriceListId,
+                pl.PriceListCode,
+                pl.PriceListName,
+                pl.CurrencyCode,
+                pl.IsActive,
+                pl.Priority,
+                pl.CustomerPriceGroupId,
+                cpg.PriceGroupCode,
+                cpg.PriceGroupName
+            FROM dbo.PriceLists pl
+            LEFT JOIN dbo.CustomerPriceGroups cpg ON cpg.CustomerPriceGroupId = pl.CustomerPriceGroupId
+            ORDER BY pl.PriceListCode ASC, pl.PriceListName ASC
+            `
+        );
+        res.json({ data: rows });
+    })
+);
+
+router.get(
+    "/price-lists/:priceListId/items",
+    readRoles,
+    asyncHandler(async (req, res) => {
+        const priceListId = parseId(req.params.priceListId, "priceListId");
+        const rows = await mssqlQuery(
+            "DEFAULT",
+            `
+            SELECT 
+                pli.PriceListItemId,
+                pli.PriceListId,
+                pli.ItemId,
+                i.ItemCode,
+                i.ItemName,
+                pli.ItemSpecId,
+                ispec.SpecName,
+                ispec.SalesSKU,
+                pli.UnitId,
+                unit.UnitCode,
+                unit.UnitName,
+                pli.UnitPrice,
+                pli.UnitCost,
+                pli.CurrencyCode,
+                pli.EffectiveFrom,
+                pli.EffectiveTo,
+                pli.IsActive,
+                pli.PricingMethod,
+                pli.MarkupPercent,
+                pli.MarginPercent
+            FROM dbo.PriceListItems pli
+            LEFT JOIN dbo.Items i ON i.ItemId = pli.ItemId
+            LEFT JOIN dbo.ItemSpecs ispec ON ispec.ItemSpecId = pli.ItemSpecId
+            LEFT JOIN dbo.Units unit ON unit.UnitId = pli.UnitId
+            WHERE pli.PriceListId = @priceListId
+            ORDER BY i.ItemCode ASC, pli.EffectiveFrom DESC
+            `,
+            {
+                inputs: {
+                    priceListId: { type: sql.Int, value: priceListId }
+                }
+            }
+        );
+        res.json({ data: rows });
+    })
+);
+
+router.put(
+    "/price-lists/:priceListId/toggle",
+    writeRoles,
+    asyncHandler(async (req, res) => {
+        const priceListId = parseId(req.params.priceListId, "priceListId");
+        const isActive = parseBool(req.body.isActive);
+
+        await mssqlQuery(
+            "DEFAULT",
+            `
+            UPDATE dbo.PriceLists
+            SET IsActive = @isActive
+            WHERE PriceListId = @priceListId
+            `,
+            {
+                inputs: {
+                    priceListId: { type: sql.Int, value: priceListId },
+                    isActive: { type: sql.Bit, value: isActive }
+                }
+            }
+        );
+        res.json({ message: "Price list status updated successfully" });
+    })
+);
+
+router.put(
+    "/price-lists/items/:priceListItemId/toggle",
+    writeRoles,
+    asyncHandler(async (req, res) => {
+        const priceListItemId = parseId(req.params.priceListItemId, "priceListItemId");
+        const isActive = parseBool(req.body.isActive);
+
+        await mssqlQuery(
+            "DEFAULT",
+            `
+            UPDATE dbo.PriceListItems
+            SET IsActive = @isActive
+            WHERE PriceListItemId = @priceListItemId
+            `,
+            {
+                inputs: {
+                    priceListItemId: { type: sql.Int, value: priceListItemId },
+                    isActive: { type: sql.Bit, value: isActive }
+                }
+            }
+        );
+        res.json({ message: "Price list item status updated successfully" });
+    })
 );
 
 export default router;

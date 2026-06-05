@@ -431,10 +431,15 @@ export default function QuotationCreate() {
   };
 
   // Fetch pricing from backend price lookup
-  const updateLinePrice = async (key, itemId, unitId, qty, discountPct) => {
+  const updateLinePrice = async (key, itemId, unitId, qty, discountPct, customItemSpecId = undefined) => {
     if (!selectedCustomer) return;
+    let itemSpecId = customItemSpecId;
+    if (itemSpecId === undefined) {
+      const currentLine = lines.find(line => line.key === key);
+      itemSpecId = currentLine ? currentLine.itemSpecId : null;
+    }
     try {
-      const data = await getPriceLookup(selectedCustomer.id, itemId, unitId);
+      const data = await getPriceLookup(selectedCustomer.id, itemId, unitId, itemSpecId);
       const price = data?.unitPrice || 0;
       const pricingSource = data?.pricingSource || 'None';
 
@@ -599,7 +604,7 @@ export default function QuotationCreate() {
     });
 
     // Perform price lookup asynchronously
-    await updateLinePrice(key, matched.itemId, matched.unitId, 1, 0);
+    await updateLinePrice(key, matched.itemId, matched.unitId, 1, 0, matched.itemSpecId || null);
   };
 
   // Calculate Grand Totals
@@ -1068,25 +1073,25 @@ export default function QuotationCreate() {
                 ย้อนกลับ
               </Button>
               {status === 'draft' && (
-                <>
-                  <Button
-                    type="primary"
-                    icon={<SendOutlined />}
-                    onClick={handleRequestApproval}
-                    loading={actionLoading}
-                    style={{ backgroundColor: '#1890ff', borderColor: '#1890ff' }}
-                  >
-                    ส่งขออนุมัติ
-                  </Button>
-                  <Button
-                    danger
-                    icon={<CloseCircleOutlined />}
-                    onClick={handleCancelQuotation}
-                    loading={actionLoading}
-                  >
-                    ยกเลิก
-                  </Button>
-                </>
+                <Button
+                  type="primary"
+                  icon={<SendOutlined />}
+                  onClick={handleRequestApproval}
+                  loading={actionLoading}
+                  style={{ backgroundColor: '#1890ff', borderColor: '#1890ff' }}
+                >
+                  ส่งขออนุมัติ
+                </Button>
+              )}
+              {status !== 'closed' && (
+                <Button
+                  danger
+                  icon={<CloseCircleOutlined />}
+                  onClick={handleCancelQuotation}
+                  loading={actionLoading}
+                >
+                  ยกเลิกใบเสนอราคา
+                </Button>
               )}
               <Button
                 type="primary"
@@ -1095,6 +1100,14 @@ export default function QuotationCreate() {
                 style={{ backgroundColor: '#722ed1', borderColor: '#722ed1' }}
               >
                 พิมพ์ใบเสนอราคา
+              </Button>
+              <Button
+                type="primary"
+                icon={<PrinterOutlined />}
+                onClick={() => window.open(`/document/print?form=CPO&docId=${viewId}`, '_blank')}
+                style={{ backgroundColor: '#2d7d32', borderColor: '#2d7d32' }}
+              >
+                พิมพ์ใบ PO ลูกค้า
               </Button>
             </>
           ) : (
@@ -1558,7 +1571,7 @@ export default function QuotationCreate() {
               pagination={false}
               bordered
               size="small"
-              scroll={{ x: 2250 }}
+              scroll={{ x: 2370 }}
               columns={[
                 {
                   title: 'ลำดับ',
@@ -1645,6 +1658,42 @@ export default function QuotationCreate() {
                   )
                 },
                 {
+                  title: 'หน่วยขาย',
+                  dataIndex: 'unitId',
+                  key: 'unitId',
+                  width: 120,
+                  render: (val, record) => {
+                    if (isReadOnly) {
+                      return <Text>{record.unitCode || '-'}</Text>;
+                    }
+                    return (
+                      <Select
+                        placeholder="หน่วย..."
+                        value={val || undefined}
+                        options={lookups.units || []}
+                        style={{ width: '100%' }}
+                        onChange={(selectedUnitId) => {
+                          const matchedUnit = (lookups.units || []).find(u => u.value === selectedUnitId);
+                          const selectedUnitCode = matchedUnit ? matchedUnit.label.split(' - ')[0] : '';
+
+                          setLines(prev => prev.map(line => {
+                            if (line.key === record.key) {
+                              return {
+                                ...line,
+                                unitId: selectedUnitId,
+                                unitCode: selectedUnitCode
+                              };
+                            }
+                            return line;
+                          }));
+                          updateLinePrice(record.key, record.itemId, selectedUnitId, record.qty, record.discountPercent);
+                        }}
+                        disabled={!record.itemId}
+                      />
+                    );
+                  }
+                },
+                {
                   title: 'พาเลท',
                   dataIndex: 'pallet',
                   key: 'pallet',
@@ -1656,7 +1705,7 @@ export default function QuotationCreate() {
                   title: 'ราคาหน่วย',
                   dataIndex: 'unitPrice',
                   key: 'unitPrice',
-                  width: 100,
+                  width: 150,
                   render: (val, record) => (
                     <div>
                       <InputNumber

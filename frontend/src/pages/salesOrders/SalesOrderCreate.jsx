@@ -6,8 +6,9 @@ import {
 } from 'antd';
 import {
   SearchOutlined, SortAscendingOutlined, HistoryOutlined,
-  PercentageOutlined, CheckCircleOutlined,
-  DeleteOutlined, PlusOutlined, SaveOutlined, ClearOutlined
+  PercentageOutlined, CheckCircleOutlined, PrinterOutlined,
+  DeleteOutlined, PlusOutlined, SaveOutlined, ClearOutlined,
+  EditOutlined, CloseCircleOutlined, CloseOutlined, SendOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useMasterData } from '../../context/MasterDataContext';
@@ -23,6 +24,7 @@ export default function SalesOrderCreate() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const cloneId = searchParams.get('cloneId');
+  const viewId = searchParams.get('viewId');
   const { lookups, fetchLookups } = useMasterData();
   const { getCustomers, getAddresses } = useCustomer();
   const { getBranches } = useCompany();
@@ -33,7 +35,10 @@ export default function SalesOrderCreate() {
     searchSkus,
     getCustomerHistory: getSalesOrderHistory,
     getSalesOrderDetail,
-    createSalesOrder
+    createSalesOrder,
+    updateSalesOrder,
+    requestApproval,
+    cancelSalesOrder
   } = useSalesOrder();
 
   const {
@@ -45,6 +50,13 @@ export default function SalesOrderCreate() {
 
   // State
   const [loading, setLoading] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const isReadOnly = !!viewId && !isEditing;
+  const [status, setStatus] = useState(null);
+  const [documentNo, setDocumentNo] = useState('');
+  const [actionLoading, setActionLoading] = useState(false);
+  const [deliveryOrderCount, setDeliveryOrderCount] = useState(0);
+  const [invoiceCount, setInvoiceCount] = useState(0);
 
   // Customers autocomplete & select
   const [customerSearch, setCustomerSearch] = useState('');
@@ -89,7 +101,7 @@ export default function SalesOrderCreate() {
   const [lineDiscountPercentVal, setLineDiscountPercentVal] = useState(0);
 
   // Global Tax details
-  const [taxType, setTaxType] = useState('VAT7EX'); // VAT7EX (ex-vat), VAT7IN (in-vat), VAT0 (no vat)
+  const [taxType, setTaxType] = useState('VAT7EX'); // VAT7EX, VAT7IN, VAT0
 
   // Load master data lookups on mount
   useEffect(() => {
@@ -105,15 +117,23 @@ export default function SalesOrderCreate() {
     loadCompanyBranches();
   }, []);
 
-  // Load and populate cloned sales order if cloneId is provided in query params
+  // Load and populate cloned or viewed sales order if cloneId or viewId is provided
   useEffect(() => {
-    if (!cloneId) return;
+    const targetId = viewId || cloneId;
+    if (!targetId) return;
 
-    const loadClonedSalesOrder = async () => {
+    const loadSalesOrderData = async () => {
       setLoading(true);
       try {
-        const soData = await getSalesOrderDetail(cloneId);
+        const soData = await getSalesOrderDetail(targetId);
         if (!soData) return;
+
+        if (viewId) {
+          setStatus(soData.status);
+          setDocumentNo(soData.documentNo || soData.DocumentNo);
+          setDeliveryOrderCount(soData.deliveryOrderCount || 0);
+          setInvoiceCount(soData.invoiceCount || 0);
+        }
 
         // 1. Populate Customer
         const customerObj = {
@@ -122,31 +142,65 @@ export default function SalesOrderCreate() {
           name: soData.CustomerName || soData.customerName,
           taxId: soData.TaxId || soData.taxId || 'N/A'
         };
+
+        // Set Customer Select
+        handleCustomerSearch(customerObj.code);
         setSelectedCustomer(customerObj);
 
         // 2. Fetch Customer Addresses
-        const addresses = await getAddresses(soData.CustomerId || soData.customerId);
+        const addresses = await getAddresses(customerObj.id);
         setAddressesList(addresses || []);
 
         // 3. Setup form field values
         const formFields = {
           branchId: soData.BranchId || soData.branchId || undefined,
-          customerId: soData.CustomerId || soData.customerId,
-          customerName: soData.CustomerName || soData.customerName,
-          taxId: soData.TaxId || soData.taxId || 'N/A',
+          customerId: customerObj.id,
+          customerName: customerObj.name,
+          taxId: customerObj.taxId,
           salesPersonId: soData.SalesPersonId || soData.salesPersonId || undefined,
           paymentTermId: soData.PaymentTermId || soData.paymentTermId || undefined,
           warehouseId: soData.WarehouseId || soData.warehouseId || undefined,
           remarks: soData.Remarks || soData.remarks || '',
-          deliveryLocation: soData.ShippingAddress ? 'other' : undefined,
+          deliveryLocation: soData.ShippingAddress || soData.shippingAddress ? 'other' : undefined,
           deliveryAddressText: soData.ShippingAddress || soData.shippingAddress || '',
           customerPoId: soData.CustomerPoNo || soData.customerPoNo || '',
           deliveryDate: soData.RequiredDate || soData.requiredDate ? dayjs(soData.RequiredDate || soData.requiredDate) : null,
-          documentDate: dayjs() // fresh creation date
+          documentDate: viewId ? dayjs(soData.DocumentDate || soData.documentDate) : dayjs()
         };
 
         if (soData.ShippingAddress || soData.shippingAddress) {
           setCustomAddressEnabled(true);
+          formFields.deliveryLocation = 'other';
+        } else {
+          // Look up address matching the string, or set default address
+          const defaultAddr = (addresses || []).find(a => a.isDefault) || (addresses || [])[0];
+          if (defaultAddr) {
+            formFields.deliveryLocation = defaultAddr.id;
+            formFields.deliveryAddressText = formatAddress(defaultAddr);
+            setCustomAddressEnabled(false);
+          }
+        }
+
+        // If it has a salesperson, load salesperson search list and name
+        const spId = soData.SalesPersonId || soData.salesPersonId;
+        if (spId) {
+          const spRes = await getSalespersons('');
+          setSalespersonsList(spRes || []);
+          const sp = (spRes || []).find(s => s.value === spId);
+          if (sp) {
+            formFields.saleName = sp.DisplayName;
+          }
+        }
+
+        // If it has a branch, load branch details to set branchName
+        const bId = soData.BranchId || soData.branchId;
+        if (bId) {
+          const brList = await getBranches(1);
+          setBranchesList(brList || []);
+          const br = (brList || []).find(b => b.branchId === bId);
+          if (br) {
+            formFields.branchName = br.branchName;
+          }
         }
 
         form.setFieldsValue(formFields);
@@ -155,7 +209,7 @@ export default function SalesOrderCreate() {
         const taxVal = soData.TaxType || soData.taxType || 'exclusive';
         const initialTaxType = taxVal === 'no_vat' ? 'VAT0' : (taxVal === 'inclusive' ? 'VAT7IN' : 'VAT7EX');
         setTaxType(initialTaxType);
-        formFields.transactionTypeId = initialTaxType;
+        form.setFieldsValue({ transactionTypeId: initialTaxType });
 
         // 5. Populate lines
         if (Array.isArray(soData.lines) && soData.lines.length > 0) {
@@ -183,9 +237,9 @@ export default function SalesOrderCreate() {
             const unitPrice = line.UnitPrice !== undefined ? line.UnitPrice : (line.unitPrice || 0);
 
             const discountPercent = line.DiscountPercent !== undefined ? line.DiscountPercent : (line.discountPercent || 0);
-            const discountAmount = line.DiscountAmount !== undefined ? line.discountAmount : (line.discountAmount || 0);
+            const discountAmount = line.DiscountAmount !== undefined ? line.DiscountAmount : (line.discountAmount || 0);
             const taxRatePercent = line.TaxRatePercent !== undefined ? line.TaxRatePercent : (line.taxRatePercent || 7);
-            const lineTotal = line.LineAmount !== undefined ? line.LineAmount : (line.lineAmount || 0);
+            const lineTotal = line.LineAmount !== undefined ? line.lineAmount : (line.lineAmount || 0);
 
             return {
               key: Date.now() + idx,
@@ -211,42 +265,44 @@ export default function SalesOrderCreate() {
             };
           });
 
-          mappedLines.push({
-            key: Date.now() + mappedLines.length + 1,
-            lineNum: mappedLines.length + 1,
-            itemId: null,
-            sku: '',
-            name: '',
-            productType: '',
-            remark: '',
-            thickness: '',
-            width: '',
-            length: '',
-            qty: 0,
-            pallet: '0.00',
-            unitId: null,
-            unitCode: '',
-            unitPrice: 0,
-            discountPercent: 0,
-            discountAmount: 0,
-            taxRatePercent: 7,
-            lineTotal: 0
-          });
+          if (!viewId) {
+            mappedLines.push({
+              key: Date.now() + mappedLines.length + 1,
+              lineNum: mappedLines.length + 1,
+              itemId: null,
+              sku: '',
+              name: '',
+              productType: '',
+              remark: '',
+              thickness: '',
+              width: '',
+              length: '',
+              qty: 0,
+              pallet: '0.00',
+              unitId: null,
+              unitCode: '',
+              unitPrice: 0,
+              discountPercent: 0,
+              discountAmount: 0,
+              taxRatePercent: 7,
+              lineTotal: 0
+            });
+          }
 
           setLines(mappedLines);
         }
 
-        message.success('คัดลอกข้อมูลใบสั่งขายต้นทางเรียบร้อยแล้ว');
+        message.success(viewId ? 'โหลดข้อมูลใบสั่งขายเรียบร้อยแล้ว' : 'คัดลอกข้อมูลใบสั่งขายต้นทางเรียบร้อยแล้ว');
       } catch (err) {
-        console.error('Failed to load cloned sales order data', err);
-        message.error('โหลดข้อมูลใบสั่งขายตั้งต้นเพื่อทำสำเนาล้มเหลว');
+        console.error('Failed to load sales order data', err);
+        message.error(viewId ? 'โหลดข้อมูลใบสั่งขายล้มเหลว' : 'โหลดข้อมูลใบสั่งขายตั้งต้นเพื่อทำสำเนาล้มเหลว');
       } finally {
         setLoading(false);
       }
     };
 
-    loadClonedSalesOrder();
-  }, [cloneId]);
+    loadSalesOrderData();
+  }, [cloneId, viewId]);
 
   // Global F3 Keyboard shortcut listener
   useEffect(() => {
@@ -372,10 +428,15 @@ export default function SalesOrderCreate() {
   };
 
   // Fetch pricing from backend price lookup
-  const updateLinePrice = async (key, itemId, unitId, qty, discountPct) => {
+  const updateLinePrice = async (key, itemId, unitId, qty, discountPct, customItemSpecId = undefined) => {
     if (!selectedCustomer) return;
+    let itemSpecId = customItemSpecId;
+    if (itemSpecId === undefined) {
+      const currentLine = lines.find(line => line.key === key);
+      itemSpecId = currentLine ? currentLine.itemSpecId : null;
+    }
     try {
-      const data = await getPriceLookup(selectedCustomer.id, itemId, unitId);
+      const data = await getPriceLookup(selectedCustomer.id, itemId, unitId, itemSpecId);
       const price = data?.unitPrice || 0;
       const pricingSource = data?.pricingSource || 'None';
 
@@ -429,7 +490,7 @@ export default function SalesOrderCreate() {
     const matchedSku = matched.salesSku || matched.itemCode;
     const existingLine = lines.find(line => line.key !== key && line.sku === matchedSku);
     if (existingLine) {
-      message.warning(`สินค้า ${matchedSku} มีในรายการแล้ว ระบบทำการเพิ่มจำนวนให้เรียบร้อยแล้ว`);
+      message.warning(`สินค้า ${matchedSku} มีอยู่ในรายการแล้ว ระบบได้ทำการเพิ่มจำนวนสินค้าให้เรียบร้อยแล้ว`);
       setLines(prev => {
         const updated = prev.map(line => {
           if (line.key === existingLine.key) {
@@ -532,7 +593,7 @@ export default function SalesOrderCreate() {
       return updated;
     });
 
-    await updateLinePrice(key, matched.itemId, matched.unitId, 1, 0);
+    await updateLinePrice(key, matched.itemId, matched.unitId, 1, 0, matched.itemSpecId || null);
   };
 
   // Calculate Grand Totals
@@ -620,7 +681,7 @@ export default function SalesOrderCreate() {
   // Delete a Line row
   const deleteLine = (key) => {
     if (lines.length <= 1) {
-      message.warning('ต้องมีรายการสินค้าอย่างน้อย 1 แถว');
+      message.warning('ต้องมีรายการสินค้าอย่างน้อย 1 รายการ');
       return;
     }
     setLines(prev => {
@@ -676,9 +737,8 @@ export default function SalesOrderCreate() {
 
   // Action 3: Copy Historical Data (Quotation / SO)
   const openHistoryModal = async (type) => {
-    console.log('selectedCustomer', selectedCustomer);
     if (!selectedCustomer) {
-      message.warning('โปรดเลือกลูกค้าก่อนตรวจสอบประวัติ');
+      message.warning('โปรดเลือกลูกค้าก่อนตรวจสอบประวัติเอกสาร');
       return;
     }
     setHistoryType(type);
@@ -719,7 +779,7 @@ export default function SalesOrderCreate() {
       }
     } catch (err) {
       console.error('Failed to load history lines', err);
-      message.error('โหลดข้อมูลรายการสินค้าของเอกสารนี้ไม่สำเร็จ');
+      message.error('โหลดรายละเอียดรายการสินค้าไม่สำเร็จ');
       setHistoryLines([]);
     } finally {
       setHistoryLinesLoading(false);
@@ -770,7 +830,7 @@ export default function SalesOrderCreate() {
           const discountPercent = line.DiscountPercent !== undefined ? line.DiscountPercent : (line.discountPercent || 0);
           const discountAmount = line.DiscountAmount !== undefined ? line.discountAmount : (line.discountAmount || 0);
           const taxRatePercent = line.TaxRatePercent !== undefined ? line.TaxRatePercent : (line.taxRatePercent || 7);
-          const lineTotal = line.LineAmount !== undefined ? line.LineAmount : (line.lineAmount || 0);
+          const lineTotal = line.LineAmount !== undefined ? line.lineAmount : (line.lineAmount || 0);
 
           return {
             key: Date.now() + idx,
@@ -821,12 +881,12 @@ export default function SalesOrderCreate() {
         setLines(clonedLines);
         message.success(`คัดลอกรายการสินค้า ${clonedLines.length - 1} รายการจากเอกสาร ${docNo} สำเร็จ`);
       } else {
-        message.warning('เอกสารที่เลือกไม่มีรายการสินค้า');
+        message.warning('เอกสารไม่มีรายการสินค้า');
       }
       setIsHistoryModalOpen(false);
     } catch (err) {
       console.error('Error cloning details', err);
-      message.error('ไม่สามารถดึงข้อมูลรายการเก่าได้');
+      message.error('ไม่สามารถดึงข้อมูลรายการใบเสนอราคาเก่าได้');
     } finally {
       setLoading(false);
     }
@@ -907,7 +967,7 @@ export default function SalesOrderCreate() {
   };
 
   // Form submission
-  const saveSO = async (status) => {
+  const saveSO = async (statusVal) => {
     const isValid = performValidation();
     if (!isValid) return;
 
@@ -927,7 +987,8 @@ export default function SalesOrderCreate() {
           discountAmount: l.discountAmount,
           taxRatePercent: l.taxRatePercent,
           unitId: l.unitId,
-          pricingSource: l.pricingSource || 'manual'
+          pricingSource: l.pricingSource || 'manual',
+          remark: l.remark || ''
         }));
 
       const payload = {
@@ -941,19 +1002,186 @@ export default function SalesOrderCreate() {
         warehouseId: formValues.warehouseId || null,
         taxType: taxType === 'VAT7EX' ? 'exclusive' : (taxType === 'VAT7IN' ? 'inclusive' : 'no_vat'),
         remarks: formValues.remarks || '',
-        status: status,
+        status: statusVal,
         lines: payloadLines,
         shippingAddress: formValues.deliveryAddressText || ''
       };
 
-      await createSalesOrder(payload);
-      message.success(`บันทึกใบสั่งขายสำเร็จ! (สถานะ: ${status === 'draft' ? 'ร่าง' : 'บันทึกเรียบร้อย'})`);
-      navigate('/dashboard');
+      if (viewId) {
+        await updateSalesOrder(viewId, payload);
+        message.success('แก้ไขใบสั่งขายสำเร็จ!');
+        setIsEditing(false);
+        window.location.reload();
+      } else {
+        await createSalesOrder(payload);
+        message.success(`บันทึกใบสั่งขายสำเร็จ! (สถานะ: ${statusVal === 'draft' ? 'ร่าง' : 'บันทึกสำเร็จ'})`);
+        navigate('/dashboard');
+      }
     } catch (err) {
       console.error('Error saving sales order', err);
-      message.error(err.message || 'บันทึกใบสั่งขายล้มเหลว');
+      message.error(err.response?.data?.message || err.message || 'บันทึกใบสั่งขายล้มเหลว');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleCancelSalesOrder = () => {
+    Modal.confirm({
+      title: 'ยกเลิกใบสั่งขาย',
+      content: 'คุณแน่ใจหรือไม่ว่าต้องการยกเลิกใบสั่งขายนี้? การดำเนินการนี้ไม่สามารถย้อนกลับได้',
+      okText: 'ยืนยันยกเลิก',
+      okButtonProps: { danger: true },
+      cancelText: 'ย้อนกลับ',
+      onOk: async () => {
+        setActionLoading(true);
+        try {
+          await cancelSalesOrder(viewId, 'Cancelled by user');
+          message.success('ยกเลิกใบสั่งขายสำเร็จ!');
+          window.location.reload();
+        } catch (err) {
+          console.error('Cancel sales order failed', err);
+          message.error(err.response?.data?.message || err.message || 'ยกเลิกใบสั่งขายล้มเหลว');
+        } finally {
+          setActionLoading(false);
+        }
+      }
+    });
+  };
+
+  const handleRequestApproval = () => {
+    Modal.confirm({
+      title: 'ส่งใบสั่งขายขออนุมัติ',
+      content: 'คุณแน่ใจหรือไม่ว่าต้องการส่งใบสั่งขายนี้เข้าสู่ขั้นตอนขออนุมัติ? เมื่อส่งแล้วจะไม่สามารถแก้ไขข้อมูลได้ชั่วคราว',
+      okText: 'ส่งขออนุมัติ',
+      cancelText: 'ยกเลิก',
+      onOk: async () => {
+        setActionLoading(true);
+        try {
+          await requestApproval(viewId);
+          message.success('ส่งขออนุมัติใบสั่งขายสำเร็จ!');
+          window.location.reload();
+        } catch (err) {
+          console.error('Request approval failed', err);
+          message.error(err.response?.data?.message || err.message || 'ส่งขออนุมัติล้มเหลว');
+        } finally {
+          setActionLoading(false);
+        }
+      }
+    });
+  };
+
+  const renderStatusTag = (statusVal) => {
+    switch (statusVal) {
+      case 'draft':
+        return <Tag color="default">ร่าง (Draft)</Tag>;
+      case 'requested':
+        return <Tag color="processing">รออนุมัติ (Requested)</Tag>;
+      case 'approved':
+        return <Tag color="success">อนุมัติแล้ว (Approved)</Tag>;
+      case 'closed':
+        return <Tag color="error">ปิดแล้ว (Closed)</Tag>;
+      case 'cancelled':
+        return <Tag color="error">ยกเลิกแล้ว (Cancelled)</Tag>;
+      default:
+        return <Tag color="warning">{statusVal}</Tag>;
+    }
+  };
+
+  const renderHeaderActions = () => {
+    if (viewId) {
+      if (isEditing) {
+        return (
+          <>
+            <Button
+              icon={<CloseOutlined />}
+              onClick={() => {
+                setIsEditing(false);
+                window.location.reload();
+              }}
+            >
+              ยกเลิกการแก้ไข
+            </Button>
+            <Button
+              type="primary"
+              icon={<SaveOutlined />}
+              onClick={() => saveSO(status)}
+              loading={loading}
+            >
+              บันทึกการแก้ไข
+            </Button>
+          </>
+        );
+      } else {
+        return (
+          <>
+            <Button icon={<ClearOutlined />} onClick={() => navigate('/salesorder/list')}>
+              ย้อนกลับ
+            </Button>
+            {status === 'draft' && (
+              <Button
+                type="primary"
+                icon={<SendOutlined />}
+                onClick={handleRequestApproval}
+                loading={actionLoading}
+                style={{ backgroundColor: '#1890ff', borderColor: '#1890ff' }}
+              >
+                ส่งขออนุมัติ
+              </Button>
+            )}
+            {status !== 'closed' && status !== 'cancelled' && (
+              <>
+                <Button
+                  type="primary"
+                  icon={<EditOutlined />}
+                  onClick={() => setIsEditing(true)}
+                  disabled={deliveryOrderCount > 0 || invoiceCount > 0}
+                >
+                  แก้ไขใบสั่งขาย
+                </Button>
+                <Button
+                  danger
+                  icon={<CloseCircleOutlined />}
+                  onClick={handleCancelSalesOrder}
+                  loading={actionLoading}
+                  disabled={deliveryOrderCount > 0 || invoiceCount > 0}
+                >
+                  ยกเลิกใบสั่งขาย
+                </Button>
+              </>
+            )}
+            <Button
+              type="primary"
+              icon={<PrinterOutlined />}
+              onClick={() => window.open(`/document/print?form=SO&docId=${viewId}`, '_blank')}
+              style={{ backgroundColor: '#722ed1', borderColor: '#722ed1' }}
+            >
+              พิมพ์ใบสั่งขาย
+            </Button>
+          </>
+        );
+      }
+    } else {
+      return (
+        <>
+          <Button icon={<ClearOutlined />} onClick={() => {
+            form.resetFields();
+            setLines([
+              { key: 1, lineNum: 1, itemId: null, itemSpecId: null, sku: '', name: '', productType: '', remark: '', thickness: '', width: '', length: '', qty: 0, pallet: '0.00', unitId: null, unitCode: '', unitPrice: 0, discountPercent: 0, discountAmount: 0, taxRatePercent: 7, lineTotal: 0 }
+            ]);
+            setSelectedCustomer(null);
+          }}>
+            ล้างค่า
+          </Button>
+          <Button
+            type="primary"
+            icon={<CheckCircleOutlined />}
+            onClick={() => saveSO('requested')}
+            loading={loading}
+          >
+            บันทึกใบสั่งขาย
+          </Button>
+        </>
+      );
     }
   };
 
@@ -961,34 +1189,26 @@ export default function SalesOrderCreate() {
     <div className="space-y-4">
       {/* Title bar */}
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-slate-800">
-          สร้างใบสั่งขาย (Create Sales Order)
+        <h1 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+          {viewId ? (
+            <>
+              <span>{isEditing ? 'แก้ไขใบสั่งขาย' : 'รายละเอียดใบสั่งขาย'} {documentNo}</span>
+              {status && renderStatusTag(status)}
+            </>
+          ) : (
+            'สร้างใบสั่งขาย (Create Sales Order)'
+          )}
         </h1>
         <div className="flex gap-2">
-          <Button icon={<ClearOutlined />} onClick={() => {
-            form.resetFields();
-            setLines([
-              { key: 1, lineNum: 1, itemId: null, itemSpecId: null, sku: '', name: '', productType: '', remark: '', thickness: '', width: '', length: '', qty: 0, pallet: '0.00', unitId: null, unitCode: '', unitPrice: 0, discountPercent: 0, discountAmount: 0, taxRatePercent: 7, lineTotal: 0 }
-            ]);
-            setSelectedCustomer(null);
-          }}>ล้างค่า
-          </Button>
-          <Button type="dashed"
-            style={{ borderColor: '#faad14', color: '#faad14' }}
-            icon={<SaveOutlined />} onClick={() => saveSO('draft')}>
-            บันทึกร่าง
-          </Button>
-          <Button type="primary" icon={<CheckCircleOutlined />} onClick={() => saveSO('requested')}>
-            บันทึกใบสั่งขาย
-          </Button>
+          {renderHeaderActions()}
         </div>
       </div>
 
       <div className="space-y-3">
-        <Form form={form} layout="vertical" size="small" initialValues={{ documentDate: dayjs(), transactionTypeId: 'VAT7EX' }}>
+        <Form form={form} layout="vertical" size="small" disabled={isReadOnly} initialValues={{ documentDate: dayjs(), transactionTypeId: 'VAT7EX' }}>
           <Row gutter={24}>
 
-            {/* Left Column: Form Fields exact layout from QuotationCreate */}
+            {/* Left Column: Form Fields */}
             <Col xs={24} lg={16}>
               <Card
                 title={<span style={{ color: '#1a3353', fontWeight: 'bold' }}>ข้อมูลลูกค้า & รายละเอียดใบสั่งขาย</span>}
@@ -1002,8 +1222,8 @@ export default function SalesOrderCreate() {
                     </Form.Item>
                   </Col>
                   <Col xs={24} md={6}>
-                    <Form.Item name="deliveryDate" label="วันที่จัดส่ง">
-                      <DatePicker style={{ width: '100%' }} placeholder="เลือกวันจัดส่ง..." />
+                    <Form.Item name="deliveryDate" label="วันที่นัดส่ง">
+                      <DatePicker style={{ width: '100%' }} placeholder="เลือกวันที่นัดส่ง..." />
                     </Form.Item>
                   </Col>
                   <Col xs={24} md={6}>
@@ -1014,7 +1234,7 @@ export default function SalesOrderCreate() {
                         filterOption={false}
                         optionLabelProp="label"
                         onChange={handleBranchChange}
-                        placeholder="พิมพ์เพื่อค้นหาจุดจากสถานที่..."
+                        placeholder="พิมพ์เพื่อค้นหาคลัง/สาขาต้นทาง..."
                         style={{ width: '100%' }}
                       >
                         {branchesList.map((b) => (
@@ -1140,16 +1360,15 @@ export default function SalesOrderCreate() {
                 <Divider style={{ margin: '12px 0' }} />
 
                 <Row gutter={16}>
-                  {/* Position 1 and 2 underneath deliveryLocation as side by side Form.Item */}
                   <Col xs={24} md={12}>
                     <Form.Item
                       name="deliveryLocation"
-                      label={<span style={{ color: '#1890ff', fontWeight: 'bold' }}>จัดส่งจากสถานที่ / สาขาจัดส่ง</span>}
+                      label={<span style={{ color: '#1890ff', fontWeight: 'bold' }}>สถานที่จัดส่ง / สาขาจัดส่ง</span>}
                       rules={[{ required: true, message: 'โปรดเลือกสถานที่จัดส่ง' }]}
                       style={{ marginBottom: '12px' }}
                     >
                       <Select
-                        placeholder="เลือกสถานที่ส่งสินค้า"
+                        placeholder="เลือกสถานที่จัดส่งสินค้า"
                         onChange={handleAddressChange}
                       >
                         {addressesList.map(a => (
@@ -1162,9 +1381,9 @@ export default function SalesOrderCreate() {
                     </Form.Item>
 
                     <Row gutter={12}>
-                      <Col span={12}>
-                        <Form.Item label="หมายเลขคำสั่งซื้อ" name="customerPoId">
-                          <Input placeholder="กรอกหมายเลขคำสั่งซื้อ..." />
+                      <Col span={24}>
+                        <Form.Item label="หมายเลขใบสั่งซื้อของลูกค้า (Customer PO No.)" name="customerPoId">
+                          <Input placeholder="ระบุเลขที่ Customer PO..." />
                         </Form.Item>
                       </Col>
                     </Row>
@@ -1173,7 +1392,7 @@ export default function SalesOrderCreate() {
                   <Col xs={24} md={12}>
                     <Form.Item
                       name="deliveryAddressText"
-                      label="ที่อยู่จัดส่งจริงแบบเต็ม (Delivery Address Details)"
+                      label="ที่อยู่จัดส่งรายละเอียดเพิ่มเติม (Delivery Address Details)"
                     >
                       <TextArea
                         rows={5}
@@ -1189,6 +1408,26 @@ export default function SalesOrderCreate() {
 
             {/* Right Column: Calculations & Remarks */}
             <Col xs={24} lg={8}>
+              {isReadOnly && documentNo && (
+                <Card
+                  size="small"
+                  style={{
+                    borderRadius: '8px',
+                    background: '#f0f5ff',
+                    border: '1px solid #adc6ff',
+                    marginBottom: '24px',
+                    textAlign: 'center'
+                  }}
+                >
+                  <Text type="secondary" style={{ fontSize: '12px', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    เลขที่ใบสั่งขาย / Document No.
+                  </Text>
+                  <Title level={5} style={{ margin: '0 0 0 0', color: '#1d39c4' }}>
+                    {documentNo}
+                  </Title>
+                </Card>
+              )}
+
               <Card
                 style={{
                   borderRadius: '8px',
@@ -1275,110 +1514,113 @@ export default function SalesOrderCreate() {
           </Row>
 
           {/* Action Toolbar */}
-          <Card size="small" style={{ marginBottom: '24px', borderRadius: '8px', border: '1px solid #d9d9d9', background: '#ffffff', boxShadow: '0 2px 6px rgba(0,0,0,0.03)' }}>
-            <Row justify="space-between" align="middle" gutter={[12, 12]}>
-              <Col xs={24} md={18}>
-                <Space wrap size="middle">
-                  <Button
-                    onClick={() => openF3Modal(lines[lines.length - 1]?.key)}
-                    style={{ borderColor: '#722ed1', color: '#722ed1' }}
-                  >
-                    ค้นหา (F3)
-                  </Button>
+          {!isReadOnly && (
+            <Card size="small" style={{ marginBottom: '24px', borderRadius: '8px', border: '1px solid #d9d9d9', background: '#ffffff', boxShadow: '0 2px 6px rgba(0,0,0,0.03)' }}>
+              <Row justify="space-between" align="middle" gutter={[12, 12]}>
+                <Col xs={24} md={18}>
+                  <Space wrap size="middle">
+                    <Button
+                      onClick={() => openF3Modal(lines[lines.length - 1]?.key)}
+                      style={{ borderColor: '#722ed1', color: '#722ed1' }}
+                    >
+                      ค้นหา (F3)
+                    </Button>
 
-                  <Select
-                    placeholder="จัดเรียง"
-                    style={{ width: 170 }}
-                    onChange={sortLines}
-                    options={[
-                      { value: 'sku', label: <Space><SortAscendingOutlined /> จัดเรียงรหัสสินค้า</Space> },
-                      { value: 'name', label: <Space><SortAscendingOutlined /> จัดเรียงชื่อสินค้า</Space> },
-                    ]}
-                  />
+                    <Select
+                      placeholder="จัดเรียง"
+                      style={{ width: 170 }}
+                      onChange={sortLines}
+                      options={[
+                        { value: 'sku', label: <Space><SortAscendingOutlined /> จัดเรียงรหัสสินค้า</Space> },
+                        { value: 'name', label: <Space><SortAscendingOutlined /> จัดเรียงชื่อสินค้า</Space> },
+                      ]}
+                    />
 
-                  {/* Specific Action Buttons Request */}
-                  <Button
-                    onClick={() => openHistoryModal('quotation')}
-                    style={{ borderColor: '#722ed1', color: '#722ed1' }}
-                  >
-                    ใบเสนอราคา
-                  </Button>
+                    <Button
+                      onClick={() => openHistoryModal('quotation')}
+                      style={{ borderColor: '#722ed1', color: '#722ed1' }}
+                    >
+                      คัดลอกใบเสนอราคา
+                    </Button>
 
-                  <Button
-                    onClick={() => openHistoryModal('sales_order')}
-                    style={{ borderColor: '#722ed1', color: '#722ed1' }}
-                  >
-                    ประวัติธุรกรรม
-                  </Button>
+                    <Button
+                      onClick={() => openHistoryModal('sales_order')}
+                      style={{ borderColor: '#722ed1', color: '#722ed1' }}
+                    >
+                      ประวัติการสั่งซื้อ
+                    </Button>
 
-                  <Button
-                    onClick={() => setIsDiscountModalOpen(true)}
-                    style={{ borderColor: '#722ed1', color: '#722ed1' }}
-                  >
-                    ส่วนลด
-                  </Button>
+                    <Button
+                      onClick={() => setIsDiscountModalOpen(true)}
+                      style={{ borderColor: '#722ed1', color: '#722ed1' }}
+                    >
+                      ส่วนลด
+                    </Button>
 
+                    <Button
+                      onClick={() => {
+                        const activeLine = lines.find(l => l.itemId);
+                        viewStock(activeLine?.sku);
+                      }}
+                      style={{ borderColor: '#722ed1', color: '#722ed1' }}
+                    >
+                      ตรวจสอบคลังสินค้า
+                    </Button>
+                  </Space>
+                </Col>
+                <Col xs={24} md={6} style={{ textAlign: 'right' }}>
                   <Button
-                    onClick={() => {
-                      const activeLine = lines.find(l => l.itemId);
-                      viewStock(activeLine?.sku);
-                    }}
+                    type="dashed"
                     style={{ borderColor: '#722ed1', color: '#722ed1' }}
+                    icon={<CheckCircleOutlined />}
+                    onClick={performValidation}
                   >
-                    สต็อกคงคลังสินค้า
+                    ตรวจสอบความถูกต้องเอกสาร
                   </Button>
-                </Space>
-              </Col>
-              <Col xs={24} md={6} style={{ textAlign: 'right' }}>
-                <Button
-                  type="dashed"
-                  style={{ borderColor: '#722ed1', color: '#722ed1' }}
-                  icon={<CheckCircleOutlined />}
-                  onClick={performValidation}
-                >
-                  ตรวจสอบข้อมูลเอกสาร
-                </Button>
-              </Col>
-            </Row>
-          </Card>
+                </Col>
+              </Row>
+            </Card>
+          )}
 
           {/* Sku table */}
           <Card
             title={
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ color: '#1a3353', fontWeight: 'bold' }}>รายการสินค้าในใบสั่งขาย</span>
-                <Button
-                  type="dashed"
-                  icon={<PlusOutlined />}
-                  onClick={() => {
-                    setLines(prev => [
-                      ...prev,
-                      {
-                        key: Date.now(),
-                        lineNum: prev.length + 1,
-                        itemId: null,
-                        sku: '',
-                        name: '',
-                        productType: '',
-                        remark: '',
-                        thickness: '',
-                        width: '',
-                        length: '',
-                        qty: 0,
-                        pallet: '0.00',
-                        unitId: null,
-                        unitCode: '',
-                        unitPrice: 0,
-                        discountPercent: 0,
-                        discountAmount: 0,
-                        taxRatePercent: 7,
-                        lineTotal: 0
-                      }
-                    ]);
-                  }}
-                >
-                  เพิ่มรายการสินค้าใหม่
-                </Button>
+                {!isReadOnly && (
+                  <Button
+                    type="dashed"
+                    icon={<PlusOutlined />}
+                    onClick={() => {
+                      setLines(prev => [
+                        ...prev,
+                        {
+                          key: Date.now(),
+                          lineNum: prev.length + 1,
+                          itemId: null,
+                          sku: '',
+                          name: '',
+                          productType: '',
+                          remark: '',
+                          thickness: '',
+                          width: '',
+                          length: '',
+                          qty: 0,
+                          pallet: '0.00',
+                          unitId: null,
+                          unitCode: '',
+                          unitPrice: 0,
+                          discountPercent: 0,
+                          discountAmount: 0,
+                          taxRatePercent: 7,
+                          lineTotal: 0
+                        }
+                      ]);
+                    }}
+                  >
+                    เพิ่มแถวใหม่
+                  </Button>
+                )}
               </div>
             }
             bordered={false}
@@ -1389,7 +1631,7 @@ export default function SalesOrderCreate() {
               pagination={false}
               bordered
               size="small"
-              scroll={{ x: 2200 }}
+              scroll={{ x: 2320 }}
               columns={[
                 {
                   title: 'ลำดับ',
@@ -1398,12 +1640,17 @@ export default function SalesOrderCreate() {
                   width: 70,
                   align: 'center',
                   render: (text, record) => (
-                    <Space style={{ display: 'flex', gap: '4px' }}><Button
-                      type="text"
-                      danger
-                      icon={<DeleteOutlined />}
-                      onClick={() => deleteLine(record.key)}
-                    />{text}</Space>
+                    <Space style={{ display: 'flex', gap: '4px' }}>
+                      {!isReadOnly && (
+                        <Button
+                          type="text"
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={() => deleteLine(record.key)}
+                        />
+                      )}
+                      {text}
+                    </Space>
                   )
                 },
                 {
@@ -1416,6 +1663,7 @@ export default function SalesOrderCreate() {
                       <Select
                         showSearch
                         allowClear
+                        disabled={isReadOnly}
                         filterOption={false}
                         value={text || undefined}
                         onSearch={(val) => handleSkuSearch(val, record.key)}
@@ -1430,7 +1678,7 @@ export default function SalesOrderCreate() {
                           </Select.Option>
                         ))}
                       </Select>
-                      <Button icon={<SearchOutlined />} onClick={() => openF3Modal(record.key)} />
+                      {!isReadOnly && <Button icon={<SearchOutlined />} onClick={() => openF3Modal(record.key)} />}
                     </div>
                   )
                 },
@@ -1470,10 +1718,44 @@ export default function SalesOrderCreate() {
                     <InputNumber
                       min={0}
                       value={val}
+                      disabled={isReadOnly}
                       onChange={(v) => handleLineFieldChange(record.key, 'qty', v)}
                       style={{ width: '100%' }}
                     />
                   )
+                },
+                {
+                  title: 'หน่วยขาย',
+                  dataIndex: 'unitId',
+                  key: 'unitId',
+                  width: 120,
+                  render: (val, record) => {
+                    return (
+                      <Select
+                        placeholder="หน่วย..."
+                        value={val || undefined}
+                        options={lookups.units || []}
+                        style={{ width: '100%' }}
+                        disabled={isReadOnly || !record.itemId}
+                        onChange={(selectedUnitId) => {
+                          const matchedUnit = (lookups.units || []).find(u => u.value === selectedUnitId);
+                          const selectedUnitCode = matchedUnit ? matchedUnit.label.split(' - ')[0] : '';
+
+                          setLines(prev => prev.map(line => {
+                            if (line.key === record.key) {
+                              return {
+                                ...line,
+                                unitId: selectedUnitId,
+                                unitCode: selectedUnitCode
+                              };
+                            }
+                            return line;
+                          }));
+                          updateLinePrice(record.key, record.itemId, selectedUnitId, record.qty, record.discountPercent);
+                        }}
+                      />
+                    );
+                  }
                 },
                 {
                   title: 'พาเลท',
@@ -1487,18 +1769,19 @@ export default function SalesOrderCreate() {
                   title: 'ราคาหน่วย',
                   dataIndex: 'unitPrice',
                   key: 'unitPrice',
-                  width: 100,
+                  width: 150,
                   render: (val, record) => (
                     <div>
                       <InputNumber
                         min={0}
                         value={taxType === 'VAT7IN' ? Number((val * 1.07).toFixed(4)) : val}
+                        disabled={isReadOnly}
                         onChange={(v) => handleLineFieldChange(record.key, 'unitPrice', v)}
                         style={{ width: '100%' }}
                       />
                       {record.pricingSource && (
                         <div style={{ fontSize: '10px', color: '#bfbfbf', marginTop: '2px' }}>
-                          แหล่ง: {record.pricingSource}
+                          แหล่งราคา: {record.pricingSource}
                         </div>
                       )}
                     </div>
@@ -1514,6 +1797,7 @@ export default function SalesOrderCreate() {
                       min={0}
                       max={100}
                       value={val}
+                      disabled={isReadOnly}
                       onChange={(v) => handleLineFieldChange(record.key, 'discountPercent', v)}
                       style={{ width: '100%' }}
                     />
@@ -1528,13 +1812,14 @@ export default function SalesOrderCreate() {
                     <InputNumber
                       min={0}
                       value={taxType === 'VAT7IN' ? Number((val * 1.07).toFixed(4)) : val}
+                      disabled={isReadOnly}
                       onChange={(v) => handleLineFieldChange(record.key, 'discountAmount', v)}
                       style={{ width: '100%' }}
                     />
                   )
                 },
                 {
-                  title: 'จำนวนเงิน',
+                  title: 'จำนวนเงินสุทธิ',
                   dataIndex: 'lineTotal',
                   key: 'lineTotal',
                   width: 120,
@@ -1556,8 +1841,9 @@ export default function SalesOrderCreate() {
                   render: (val, record) => (
                     <Input
                       value={val}
+                      disabled={isReadOnly}
                       onChange={(e) => handleLineFieldChange(record.key, 'remark', e.target.value)}
-                      placeholder="ระบุเพิ่มเติม..."
+                      placeholder="หมายเหตุเพิ่มเติม..."
                     />
                   )
                 }
@@ -1568,31 +1854,34 @@ export default function SalesOrderCreate() {
       </div>
 
       {/* Bottom Save Actions */}
-      <div className="flex gap-2 justify-end" style={{ marginTop: '24px' }}>
-        <Button icon={<ClearOutlined />} onClick={() => {
-          form.resetFields();
-          setLines([
-            { key: 1, lineNum: 1, itemId: null, itemSpecId: null, sku: '', name: '', productType: '', remark: '', thickness: '', width: '', length: '', qty: 0, pallet: '0.00', unitId: null, unitCode: '', unitPrice: 0, discountPercent: 0, discountAmount: 0, taxRatePercent: 7, lineTotal: 0 }
-          ]);
-          setSelectedCustomer(null);
-        }}>ล้างค่า
-        </Button>
-        <Button type="dashed"
-          style={{ borderColor: '#faad14', color: '#faad14' }}
-          icon={<SaveOutlined />} onClick={() => saveSO('draft')}>
-          บันทึกร่าง
-        </Button>
-        <Button type="primary" icon={<CheckCircleOutlined />} onClick={() => saveSO('requested')}>
-          บันทึกใบสั่งขาย
-        </Button>
-      </div>
+      {!isReadOnly && (
+        <div className="flex gap-2 justify-end" style={{ marginTop: '24px' }}>
+          <Button icon={<ClearOutlined />} onClick={() => {
+            form.resetFields();
+            setLines([
+              { key: 1, lineNum: 1, itemId: null, itemSpecId: null, sku: '', name: '', productType: '', remark: '', thickness: '', width: '', length: '', qty: 0, pallet: '0.00', unitId: null, unitCode: '', unitPrice: 0, discountPercent: 0, discountAmount: 0, taxRatePercent: 7, lineTotal: 0 }
+            ]);
+            setSelectedCustomer(null);
+          }}>
+            ล้างค่า
+          </Button>
+          <Button
+            type="primary"
+            icon={<CheckCircleOutlined />}
+            onClick={() => saveSO(viewId ? status : 'requested')}
+            loading={loading}
+          >
+            {viewId ? 'บันทึกการแก้ไข' : 'บันทึกใบสั่งขาย'}
+          </Button>
+        </div>
+      )}
 
       {/* Modal 1: F3 Item Search Modal */}
       <Modal
         title={
           <span>
             <SearchOutlined style={{ marginRight: '6px', color: '#1890ff' }} />
-            ค้นหารหัสสินค้าแบบละเอียด (F3 Lookup Mode)
+            ค้นหารหัสสินค้าและรายละเอียดสินค้า (F3 Lookup Mode)
           </span>
         }
         open={isF3ModalOpen}
@@ -1602,7 +1891,7 @@ export default function SalesOrderCreate() {
       >
         <div style={{ marginBottom: '16px' }}>
           <Input.Search
-            placeholder="ค้นหาชื่อสินค้า รหัสสินค้า พื้นผิว เกรด..."
+            placeholder="ค้นหาด้วยชื่อสินค้า รหัสสินค้า ความกว้าง ความยาว..."
             value={f3SearchText}
             onChange={(e) => handleF3Search(e.target.value)}
             onSearch={handleF3Search}
@@ -1613,16 +1902,17 @@ export default function SalesOrderCreate() {
         <Table
           dataSource={f3ItemsList}
           loading={f3Loading}
+          rowKey="salesSku"
           pagination={{ pageSize: 8 }}
           bordered
           columns={[
             { title: 'รหัสสินค้า', dataIndex: 'salesSku', key: 'salesSku', render: (t, r) => t || r.itemCode },
-            { title: 'ชื่อสินค้าแบบเต็ม', dataIndex: 'displayName', key: 'displayName' },
-            { title: 'หน่วย', dataIndex: 'unitName', key: 'unitName' },
+            { title: 'ชื่อสินค้าและรายละเอียด', dataIndex: 'displayName', key: 'displayName' },
+            { title: 'หน่วยนับ', dataIndex: 'unitName', key: 'unitName' },
             { title: 'ความหนา', dataIndex: 'thicknessMm', key: 'thicknessMm', render: (t) => t ? `${t} mm` : '-' },
             { title: 'อัตราภาษี', dataIndex: 'taxRatePercent', key: 'taxRatePercent', render: (t) => `${t || 0}%` },
             {
-              title: 'การเลือกสินค้า',
+              title: 'เลือกสินค้า',
               key: 'actions',
               align: 'center',
               render: (_, record) => (
@@ -1641,8 +1931,8 @@ export default function SalesOrderCreate() {
           <span>
             <HistoryOutlined style={{ marginRight: '6px', color: '#722ed1' }} />
             {historyType === 'quotation'
-              ? 'คัดลอกข้อมูลจากรายการใบเสนอราคาเก่า (Copy Quotation lines)'
-              : 'คัดลอกข้อมูลจากรายการใบสั่งขายเก่า (Copy Sales Order lines)'}
+              ? 'คัดลอกข้อมูลรายการใบเสนอราคาเก่า (Copy Quotation lines)'
+              : 'คัดลอกข้อมูลรายการใบสั่งขายเก่า (Copy Sales Order lines)'}
           </span>
         }
         open={isHistoryModalOpen}
@@ -1661,12 +1951,12 @@ export default function SalesOrderCreate() {
             </div>
             <Paragraph type="secondary">
               {historyType === 'quotation'
-                ? 'โปรดเลือกเอกสารใบเสนอราคาในอดีตเพื่อคัดลอกรายการสินค้าทั้งหมดเข้าสู่เอกสารนี้:'
-                : 'โปรดเลือกเอกสารใบสั่งขายในอดีตเพื่อคัดลอกรายการสินค้าทั้งหมดเข้าสู่เอกสารนี้:'}
+                ? 'โปรดเลือกเอกสารใบเสนอราคาเก่าที่ต้องการคัดลอกรายละเอียดสินค้าทั้งหมดเข้าสู่เอกสารนี้:'
+                : 'โปรดเลือกเอกสารใบสั่งขายเก่าที่ต้องการคัดลอกรายละเอียดสินค้าทั้งหมดเข้าสู่เอกสารนี้:'}
             </Paragraph>
             <Select
               style={{ width: '100%', marginBottom: '24px' }}
-              placeholder={historyType === 'quotation' ? 'โปรดเลือกเอกสารใบเสนอราคา...' : 'โปรดเลือกเอกสารใบสั่งขาย...'}
+              placeholder={historyType === 'quotation' ? 'เลือกเอกสารใบเสนอราคา...' : 'เลือกเอกสารใบสั่งขาย...'}
               loading={historyLoading}
               value={selectedHistoryId}
               onChange={handleHistorySelectChange}
@@ -1723,11 +2013,11 @@ export default function SalesOrderCreate() {
             )}
 
             {historyList.length === 0 && !historyLoading && (
-              <Empty description={historyType === 'quotation' ? 'ไม่พบเอกสารใบเสนอราคาในอดีตสำหรับลูกค้ารายนี้' : 'ไม่พบเอกสารใบสั่งขายในอดีตสำหรับลูกค้ารายนี้'} />
+              <Empty description={historyType === 'quotation' ? 'ไม่มีเอกสารใบเสนอราคาสำหรับลูกค้ารายนี้' : 'ไม่มีเอกสารใบสั่งขายสำหรับลูกค้ารายนี้'} />
             )}
           </div>
         ) : (
-          <Empty description="โปรดเลือกลูกค้าในระบบก่อนใช้งานฟังก์ชันคัดลอกข้อมูลประวัติ" />
+          <Empty description="โปรดเลือกลูกค้าและบันทึกข้อมูลเบื้องต้นก่อนคัดลอกข้อมูลประวัติ" />
         )}
       </Modal>
 
@@ -1736,13 +2026,13 @@ export default function SalesOrderCreate() {
         title={
           <span>
             <PercentageOutlined style={{ marginRight: '6px', color: '#fa8c16' }} />
-            ตั้งค่าส่วนลด (Discount Adjustment Modal)
+            ปรับปรุงราคาส่วนลด (Discount Adjustment Modal)
           </span>
         }
         open={isDiscountModalOpen}
         onCancel={() => setIsDiscountModalOpen(false)}
         onOk={applyDiscounts}
-        okText="นำไปใช้งาน (Apply)"
+        okText="ตกลง (Apply)"
         cancelText="ยกเลิก"
       >
         <Radio.Group
@@ -1753,15 +2043,15 @@ export default function SalesOrderCreate() {
           buttonStyle="solid"
         >
           <Radio.Button value="header" style={{ width: '50%', textAlign: 'center' }}>ส่วนลดท้ายบิล</Radio.Button>
-          <Radio.Button value="line" style={{ width: '50%', textAlign: 'center' }}>ส่วนลดทุกบรรทัด</Radio.Button>
+          <Radio.Button value="line" style={{ width: '50%', textAlign: 'center' }}>ส่วนลดรายบรรทัด</Radio.Button>
         </Radio.Group>
 
         {discountModalType === 'header' ? (
           <div>
-            <Paragraph>กำหนดส่วนลดที่จะนำไปลบจากยอดรวมใบสั่งขาย (ท้ายบิล):</Paragraph>
+            <Paragraph>กำหนดส่วนลดท้ายบิลสำหรับใบสั่งขายใบนี้:</Paragraph>
             <Row gutter={16}>
               <Col span={12}>
-                <Form.Item label="รูปแบบ">
+                <Form.Item label="รูปแบบส่วนลด">
                   <Select
                     value={headerDiscountType}
                     onChange={setHeaderDiscountType}
@@ -1773,7 +2063,7 @@ export default function SalesOrderCreate() {
                 </Form.Item>
               </Col>
               <Col span={12}>
-                <Form.Item label="ค่าส่วนลด">
+                <Form.Item label="มูลค่าส่วนลด">
                   <InputNumber
                     min={0}
                     value={headerDiscountVal}
@@ -1786,8 +2076,8 @@ export default function SalesOrderCreate() {
           </div>
         ) : (
           <div>
-            <Paragraph>กำหนดอัตราร้อยละส่วนลด (%) ที่จะนำไปตั้งค่าให้กับสินค้าทุกบรรทัด:</Paragraph>
-            <Form.Item label="ส่วนลดทุกบรรทัด (%)">
+            <Paragraph>กำหนดอัตราร้อยละของส่วนลดรายบรรทัดสำหรับทุกรายการสินค้าในใบสั่งขายใบนี้:</Paragraph>
+            <Form.Item label="ส่วนลดรายบรรทัด (%)">
               <InputNumber
                 min={0}
                 max={100}

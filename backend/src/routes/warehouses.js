@@ -115,4 +115,134 @@ router.delete(
   })
 );
 
+router.get(
+  '/:id/locations',
+  readRoles,
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const rows = await mssqlQuery('DEFAULT', `
+      SELECT LocationId, WarehouseId, LocationCode, LocationName, IsPickable, IsActive
+      FROM dbo.WarehouseLocations
+      WHERE WarehouseId = @whId AND IsActive = 1
+      ORDER BY LocationCode
+    `, { inputs: { whId: { type: sql.Int, value: parseInt(id, 10) } } });
+    // res.json({ data: rows.map(r => ({ value: r.LocationId, label: r.LocationCode + (r.LocationName ? ' - ' + r.LocationName : '') })) });
+    res.json({ data: rows.map(r => ({ value: r.LocationId, label: r.LocationCode })) });
+  })
+);
+
+router.get(
+  '/:id/locations-raw',
+  readRoles,
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const rows = await mssqlQuery('DEFAULT', `
+      SELECT LocationId, WarehouseId, LocationCode, LocationName, IsPickable, IsActive
+      FROM dbo.WarehouseLocations
+      WHERE WarehouseId = @whId
+      ORDER BY LocationCode
+    `, { inputs: { whId: { type: sql.Int, value: parseInt(id, 10) } } });
+    res.json({ data: rows });
+  })
+);
+
+router.post(
+  '/:id/locations',
+  writeRoles,
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { locationCode, locationName, isPickable, isActive } = req.body;
+    if (!locationCode) throw new Error('LocationCode is required');
+
+    try {
+      const result = await mssqlQuery('DEFAULT', `
+        INSERT INTO dbo.WarehouseLocations (WarehouseId, LocationCode, LocationName, IsPickable, IsActive)
+        OUTPUT INSERTED.*
+        VALUES (@whId, @code, @name, @isPickable, @isActive)
+      `, {
+        inputs: {
+          whId: { type: sql.Int, value: parseInt(id, 10) },
+          code: { type: sql.NVarChar, value: locationCode.trim() },
+          name: { type: sql.NVarChar, value: locationName ? locationName.trim() : null },
+          isPickable: { type: sql.Bit, value: isPickable === undefined ? 1 : (isPickable ? 1 : 0) },
+          isActive: { type: sql.Bit, value: isActive === undefined ? 1 : (isActive ? 1 : 0) }
+        }
+      });
+      await refreshLookupsCache();
+      res.json({ data: result[0] });
+    } catch (error) {
+      if (error.message.includes('UQ_WarehouseLocations') || error.message.includes('unique key') || error.message.includes('UNIQUE constraint')) {
+        throw new Error('รหัสตำแหน่งนี้มีอยู่แล้วในคลังสินค้านี้');
+      }
+      throw error;
+    }
+  })
+);
+
+router.put(
+  '/:id/locations/:locationId',
+  writeRoles,
+  asyncHandler(async (req, res) => {
+    const { id, locationId } = req.params;
+    const { locationCode, locationName, isPickable, isActive } = req.body;
+    if (!locationCode) throw new Error('LocationCode is required');
+
+    try {
+      const result = await mssqlQuery('DEFAULT', `
+        UPDATE dbo.WarehouseLocations
+        SET LocationCode = @code,
+            LocationName = @name,
+            IsPickable = @isPickable,
+            IsActive = @isActive
+        OUTPUT INSERTED.*
+        WHERE WarehouseId = @whId AND LocationId = @locId
+      `, {
+        inputs: {
+          whId: { type: sql.Int, value: parseInt(id, 10) },
+          locId: { type: sql.Int, value: parseInt(locationId, 10) },
+          code: { type: sql.NVarChar, value: locationCode.trim() },
+          name: { type: sql.NVarChar, value: locationName ? locationName.trim() : null },
+          isPickable: { type: sql.Bit, value: isPickable === undefined ? 1 : (isPickable ? 1 : 0) },
+          isActive: { type: sql.Bit, value: isActive === undefined ? 1 : (isActive ? 1 : 0) }
+        }
+      });
+
+      if (result.length === 0) throw new Error('Location not found');
+      await refreshLookupsCache();
+      res.json({ data: result[0] });
+    } catch (error) {
+      if (error.message.includes('UQ_WarehouseLocations') || error.message.includes('unique key') || error.message.includes('UNIQUE constraint')) {
+        throw new Error('รหัสตำแหน่งนี้มีอยู่แล้วในคลังสินค้านี้');
+      }
+      throw error;
+    }
+  })
+);
+
+router.delete(
+  '/:id/locations/:locationId',
+  writeRoles,
+  asyncHandler(async (req, res) => {
+    const { id, locationId } = req.params;
+    try {
+      await mssqlQuery('DEFAULT', `
+        DELETE FROM dbo.WarehouseLocations 
+        WHERE WarehouseId = @whId AND LocationId = @locId
+      `, {
+        inputs: {
+          whId: { type: sql.Int, value: parseInt(id, 10) },
+          locId: { type: sql.Int, value: parseInt(locationId, 10) }
+        }
+      });
+      await refreshLookupsCache();
+      res.json({ success: true });
+    } catch (error) {
+      if (error.message.includes('REFERENCE constraint')) {
+        throw new Error('ไม่สามารถลบตำแหน่งนี้ได้เนื่องจากมีข้อมูลสินค้าหรือธุรกรรมอ้างอิงอยู่');
+      }
+      throw error;
+    }
+  })
+);
+
 export default router;

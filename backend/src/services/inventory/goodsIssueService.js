@@ -57,7 +57,7 @@ export const goodsIssueService = {
       const headerReq = new sql.Request(tx);
       headerReq.input('giId', sql.Int, goodsIssueId);
       const headerRes = await headerReq.query(`
-        SELECT GoodsIssueId, Status
+        SELECT GoodsIssueId, Status, WarehouseId
         FROM dbo.GoodsIssues 
         WHERE GoodsIssueId = @giId
       `);
@@ -98,7 +98,7 @@ export const goodsIssueService = {
           taskType: 'picking', // Generates a pick task for GI
           referenceType: 'GI',
           referenceId: goodsIssueId,
-          warehouseId: lines[0].WarehouseId, 
+          warehouseId: gi.WarehouseId, 
           assignedTo: null,
           lines: lines.map(line => ({
             itemId: line.ItemId,

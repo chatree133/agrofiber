@@ -132,6 +132,10 @@ router.get(
       conditions.push('inv.SalesOrderId = @salesOrderId');
       inputs.salesOrderId = { type: sql.Int, value: parseId(req.query.salesOrderId, 'salesOrderId') };
     }
+    if (req.query.deliveryOrderId) {
+      conditions.push('inv.DeliveryOrderId = @deliveryOrderId');
+      inputs.deliveryOrderId = { type: sql.Int, value: parseId(req.query.deliveryOrderId, 'deliveryOrderId') };
+    }
 
     const whereSql = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 

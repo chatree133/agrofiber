@@ -5,6 +5,7 @@ import { documentService } from '../services/common/documentService.js';
 import { authenticate } from '../middleware/auth.js';
 import { allowRoles } from '../middleware/roles.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
+import { goodsIssueService } from '../services/inventory/goodsIssueService.js';
 
 const router = Router();
 
@@ -93,7 +94,9 @@ function mapGoodsIssue(row) {
     remark: row.Remark,
     postedAt: row.PostedAt,
     postedBy: row.PostedBy,
+    postedByName: row.PostedByName,
     createdBy: row.CreatedBy,
+    createdByName: row.CreatedByName,
     createdAt: row.CreatedAt,
     updatedAt: row.UpdatedAt,
   };
@@ -110,6 +113,7 @@ function mapGoodsIssueLine(row) {
     itemSpecId: row.ItemSpecId,
     specCode: row.SpecCode,
     specName: row.SpecName,
+    salesSKU: row.SalesSKU,
     lotId: row.LotId,
     lotNo: row.LotNo,
     warehouseId: row.WarehouseId,
@@ -163,7 +167,9 @@ async function getGoodsIssue(goodsIssueId) {
       gi.Remark,
       gi.PostedAt,
       gi.PostedBy,
+      u_post.DisplayName as PostedByName,
       gi.CreatedBy,
+      u_create.DisplayName as CreatedByName,
       gi.CreatedAt,
       gi.UpdatedAt
     FROM dbo.GoodsIssues gi
@@ -171,6 +177,8 @@ async function getGoodsIssue(goodsIssueId) {
     JOIN dbo.Warehouses w ON w.WarehouseId = gi.WarehouseId
     LEFT JOIN dbo.Customers c ON c.CustomerId = gi.CustomerId
     LEFT JOIN dbo.Branches b ON b.BranchId = gi.BranchId
+    LEFT JOIN dbo.Users u_post ON u_post.UserId = gi.PostedBy
+    LEFT JOIN dbo.Users u_create ON u_create.UserId = gi.CreatedBy
     WHERE gi.GoodsIssueId = @goodsIssueId
   `, { inputs: { goodsIssueId: { type: sql.Int, value: goodsIssueId } } });
 
@@ -189,6 +197,7 @@ async function getGoodsIssueLines(goodsIssueId) {
       gil.ItemSpecId,
       ispec.SpecCode,
       ispec.SpecName,
+      ispec.SalesSKU,
       gil.LotId,
       l.LotNo,
       gil.WarehouseId,
@@ -287,6 +296,33 @@ function calculateHeaderTotals(lines) {
   return { limitSheetTotal, requestedSheetTotal, issuedSheetTotal, palletCountTotal, m3Total };
 }
 
+async function resolveLineLots(tx, lineSnapshots, userId) {
+  for (const line of lineSnapshots) {
+    if (!line.lotId && line.lotNo) {
+      const res = await tx.request()
+        .input('itemId', sql.Int, line.itemId)
+        .input('lotNo', sql.NVarChar(80), line.lotNo)
+        .query(`
+          SELECT LotId FROM dbo.Lots WHERE ItemId = @itemId AND LotNo = @lotNo
+        `);
+      if (res.recordset.length > 0) {
+        line.lotId = res.recordset[0].LotId;
+      } else {
+        const ins = await tx.request()
+          .input('itemId', sql.Int, line.itemId)
+          .input('lotNo', sql.NVarChar(80), line.lotNo)
+          .input('createdBy', sql.Int, userId)
+          .query(`
+            INSERT INTO dbo.Lots (ItemId, LotNo, QualityStatus, CreatedBy)
+            OUTPUT INSERTED.LotId
+            VALUES (@itemId, @lotNo, 'approved', @createdBy)
+          `);
+        line.lotId = ins.recordset[0].LotId;
+      }
+    }
+  }
+}
+
 function buildLineSnapshots(rawLines) {
   if (!Array.isArray(rawLines) || !rawLines.length) throw badRequest('lines is required');
   const lines = [];
@@ -294,15 +330,16 @@ function buildLineSnapshots(rawLines) {
   for (let idx = 0; idx < rawLines.length; idx += 1) {
     const raw = rawLines[idx] || {};
     const lineNum = Number.isInteger(raw.lineNum) && raw.lineNum > 0 ? raw.lineNum : idx + 1;
-    
+
     const requestedQuantity = parseOptionalNumber(raw.requestedQuantity, `lines[${idx}].requestedQuantity`) ?? 0;
     const issuedQuantity = parseOptionalNumber(raw.issuedQuantity, `lines[${idx}].issuedQuantity`) ?? 0;
-    
+
     lines.push({
       lineNum,
       itemId: parseId(raw.itemId, `lines[${idx}].itemId`),
       itemSpecId: parseOptionalId(raw.itemSpecId, `lines[${idx}].itemSpecId`),
       lotId: parseOptionalId(raw.lotId, `lines[${idx}].lotId`),
+      lotNo: raw.lotNo ? String(raw.lotNo).trim() : null,
       warehouseId: parseOptionalId(raw.warehouseId, `lines[${idx}].warehouseId`),
       locationId: parseOptionalId(raw.locationId, `lines[${idx}].locationId`),
       unitId: parseId(raw.unitId, `lines[${idx}].unitId`),
@@ -353,6 +390,110 @@ async function writeStatusHistory(documentType, documentId, fromStatus, toStatus
     },
   });
 }
+
+router.get(
+  '/types',
+  readRoles,
+  asyncHandler(async (req, res) => {
+    const rows = await mssqlQuery('DEFAULT', `
+      SELECT GoodsIssueTypeId, GoodsIssueTypeCode, GoodsIssueTypeName, MovementTypeCode, RequiresCustomer, RequiresApproval, IsActive
+      FROM dbo.GoodsIssueTypes
+      ORDER BY GoodsIssueTypeId
+    `);
+    res.json({
+      data: rows.map(r => ({
+        goodsIssueTypeId: r.GoodsIssueTypeId,
+        goodsIssueTypeCode: r.GoodsIssueTypeCode,
+        goodsIssueTypeName: r.GoodsIssueTypeName,
+        movementTypeCode: r.MovementTypeCode,
+        requiresCustomer: Boolean(r.RequiresCustomer),
+        requiresApproval: Boolean(r.RequiresApproval),
+        isActive: Boolean(r.IsActive),
+      }))
+    });
+  })
+);
+
+router.post(
+  '/types',
+  writeRoles,
+  asyncHandler(async (req, res) => {
+    const code = String(req.body.goodsIssueTypeCode || '').trim().toUpperCase();
+    const name = String(req.body.goodsIssueTypeName || '').trim();
+    const movementTypeCode = String(req.body.movementTypeCode || 'goods_issue').trim();
+    const requiresCustomer = req.body.requiresCustomer ? 1 : 0;
+    const requiresApproval = req.body.requiresApproval ? 1 : 0;
+    const isActive = req.body.isActive !== false ? 1 : 0;
+
+    if (!code) throw badRequest('goodsIssueTypeCode is required');
+    if (!name) throw badRequest('goodsIssueTypeName is required');
+
+    const result = await mssqlQuery('DEFAULT', `
+      INSERT INTO dbo.GoodsIssueTypes (GoodsIssueTypeCode, GoodsIssueTypeName, MovementTypeCode, RequiresCustomer, RequiresApproval, IsActive)
+      OUTPUT INSERTED.GoodsIssueTypeId
+      VALUES (@code, @name, @movementTypeCode, @requiresCustomer, @requiresApproval, @isActive)
+    `, {
+      inputs: {
+        code: { type: sql.NVarChar(40), value: code },
+        name: { type: sql.NVarChar(100), value: name },
+        movementTypeCode: { type: sql.NVarChar(40), value: movementTypeCode },
+        requiresCustomer: { type: sql.Bit, value: requiresCustomer },
+        requiresApproval: { type: sql.Bit, value: requiresApproval },
+        isActive: { type: sql.Bit, value: isActive },
+      }
+    });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        goodsIssueTypeId: result[0].GoodsIssueTypeId,
+        goodsIssueTypeCode: code,
+        goodsIssueTypeName: name,
+        movementTypeCode,
+        requiresCustomer,
+        requiresApproval,
+        isActive,
+      }
+    });
+  })
+);
+
+router.put(
+  '/types/:id',
+  writeRoles,
+  asyncHandler(async (req, res) => {
+    const typeId = parseId(req.params.id, 'goodsIssueTypeId');
+    const name = String(req.body.goodsIssueTypeName || '').trim();
+    const requiresCustomer = req.body.requiresCustomer ? 1 : 0;
+    const requiresApproval = req.body.requiresApproval ? 1 : 0;
+    const isActive = req.body.isActive !== false ? 1 : 0;
+
+    if (!name) throw badRequest('goodsIssueTypeName is required');
+
+    await mssqlQuery('DEFAULT', `
+      UPDATE dbo.GoodsIssueTypes
+      SET
+        GoodsIssueTypeName = @name,
+        RequiresCustomer = @requiresCustomer,
+        RequiresApproval = @requiresApproval,
+        IsActive = @isActive
+      WHERE GoodsIssueTypeId = @typeId
+    `, {
+      inputs: {
+        typeId: { type: sql.Int, value: typeId },
+        name: { type: sql.NVarChar(100), value: name },
+        requiresCustomer: { type: sql.Bit, value: requiresCustomer },
+        requiresApproval: { type: sql.Bit, value: requiresApproval },
+        isActive: { type: sql.Bit, value: isActive },
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Goods issue type updated successfully'
+    });
+  })
+);
 
 router.get(
   '/',
@@ -502,6 +643,8 @@ router.post(
         `);
         goodsIssueId = headerRes.recordset[0].GoodsIssueId;
 
+        await resolveLineLots(tx, lineSnapshots, userId);
+
         for (const line of lineSnapshots) {
           const lineReq = new sql.Request(tx);
           lineReq.input('goodsIssueId', sql.Int, goodsIssueId);
@@ -591,121 +734,98 @@ router.put(
     const lineSnapshots = replaceLines ? buildLineSnapshots(req.body.lines) : null;
     const totals = lineSnapshots ? calculateHeaderTotals(lineSnapshots) : null;
 
-    await mssqlQuery('DEFAULT', `
-      UPDATE dbo.GoodsIssues
-      SET
-        GoodsIssueTypeId = COALESCE(@goodsIssueTypeId, GoodsIssueTypeId),
-        WarehouseId = COALESCE(@warehouseId, WarehouseId),
-        CustomerId = @customerId,
-        BranchId = @branchId,
-        RequestDate = COALESCE(@requestDate, RequestDate),
-        IssueDate = @issueDate,
-        Remark = @remark,
-        LimitSheetTotal = COALESCE(@limitSheetTotal, LimitSheetTotal),
-        RequestedSheetTotal = COALESCE(@requestedSheetTotal, RequestedSheetTotal),
-        IssuedSheetTotal = COALESCE(@issuedSheetTotal, IssuedSheetTotal),
-        PalletCountTotal = COALESCE(@palletCountTotal, PalletCountTotal),
-        M3Total = COALESCE(@m3Total, M3Total),
-        UpdatedAt = SYSUTCDATETIME()
-      WHERE GoodsIssueId = @goodsIssueId
-    `, {
-      inputs: {
-        goodsIssueId: { type: sql.Int, value: goodsIssueId },
-        goodsIssueTypeId: { type: sql.Int, value: goodsIssueTypeId },
-        warehouseId: { type: sql.Int, value: warehouseId },
-        customerId: { type: sql.Int, value: customerId },
-        branchId: { type: sql.Int, value: branchId },
-        requestDate: { type: sql.Date, value: requestDate },
-        issueDate: { type: sql.Date, value: issueDate },
-        remark: { type: sql.NVarChar(1000), value: remark },
-        limitSheetTotal: { type: sql.Decimal(18, 4), value: totals?.limitSheetTotal ?? null },
-        requestedSheetTotal: { type: sql.Decimal(18, 4), value: totals?.requestedSheetTotal ?? null },
-        issuedSheetTotal: { type: sql.Decimal(18, 4), value: totals?.issuedSheetTotal ?? null },
-        palletCountTotal: { type: sql.Decimal(18, 4), value: totals?.palletCountTotal ?? null },
-        m3Total: { type: sql.Decimal(18, 6), value: totals?.m3Total ?? null },
-      },
-    });
+    await mssqlTransaction('DEFAULT', async (tx) => {
+      const updateReq = new sql.Request(tx);
+      updateReq.input('goodsIssueId', sql.Int, goodsIssueId);
+      updateReq.input('goodsIssueTypeId', sql.Int, goodsIssueTypeId);
+      updateReq.input('warehouseId', sql.Int, warehouseId);
+      updateReq.input('customerId', sql.Int, customerId);
+      updateReq.input('branchId', sql.Int, branchId);
+      updateReq.input('requestDate', sql.Date, requestDate);
+      updateReq.input('issueDate', sql.Date, issueDate);
+      updateReq.input('remark', sql.NVarChar(1000), remark);
+      updateReq.input('limitSheetTotal', sql.Decimal(18, 4), totals?.limitSheetTotal ?? null);
+      updateReq.input('requestedSheetTotal', sql.Decimal(18, 4), totals?.requestedSheetTotal ?? null);
+      updateReq.input('issuedSheetTotal', sql.Decimal(18, 4), totals?.issuedSheetTotal ?? null);
+      updateReq.input('palletCountTotal', sql.Decimal(18, 4), totals?.palletCountTotal ?? null);
+      updateReq.input('m3Total', sql.Decimal(18, 6), totals?.m3Total ?? null);
 
-    if (replaceLines) {
-      await mssqlQuery('DEFAULT', `
-        DELETE FROM dbo.GoodsIssueLines
+      await updateReq.query(`
+        UPDATE dbo.GoodsIssues
+        SET
+          GoodsIssueTypeId = COALESCE(@goodsIssueTypeId, GoodsIssueTypeId),
+          WarehouseId = COALESCE(@warehouseId, WarehouseId),
+          CustomerId = @customerId,
+          BranchId = @branchId,
+          RequestDate = COALESCE(@requestDate, RequestDate),
+          IssueDate = @issueDate,
+          Remark = @remark,
+          LimitSheetTotal = COALESCE(@limitSheetTotal, LimitSheetTotal),
+          RequestedSheetTotal = COALESCE(@requestedSheetTotal, RequestedSheetTotal),
+          IssuedSheetTotal = COALESCE(@issuedSheetTotal, IssuedSheetTotal),
+          PalletCountTotal = COALESCE(@palletCountTotal, PalletCountTotal),
+          M3Total = COALESCE(@m3Total, M3Total),
+          UpdatedAt = SYSUTCDATETIME()
         WHERE GoodsIssueId = @goodsIssueId
-      `, { inputs: { goodsIssueId: { type: sql.Int, value: goodsIssueId } } });
+      `);
 
-      for (const line of lineSnapshots) {
-        await mssqlQuery('DEFAULT', `
-          INSERT INTO dbo.GoodsIssueLines (
-            GoodsIssueId,
-            LineNum,
-            ItemId,
-            ItemSpecId,
-            LotId,
-            WarehouseId,
-            LocationId,
-            UnitId,
-            RequestedQuantity,
-            IssuedQuantity,
-            RequestedSheetQty,
-            IssuedSheetQty,
-            LimitSheetQty,
-            PalletCount,
-            M3Quantity,
-            ProductTypeId,
-            ThicknessId,
-            WidthId,
-            LengthId,
-            Remark
-          )
-          VALUES (
-            @goodsIssueId,
-            @lineNum,
-            @itemId,
-            @itemSpecId,
-            @lotId,
-            @warehouseId,
-            @locationId,
-            @unitId,
-            @requestedQuantity,
-            @issuedQuantity,
-            @requestedSheetQty,
-            @issuedSheetQty,
-            @limitSheetQty,
-            @palletCount,
-            @m3Quantity,
-            @productTypeId,
-            @thicknessId,
-            @widthId,
-            @lengthId,
-            @remark
-          )
-        `, {
-          inputs: {
-            goodsIssueId: { type: sql.Int, value: goodsIssueId },
-            lineNum: { type: sql.Int, value: line.lineNum },
-            itemId: { type: sql.Int, value: line.itemId },
-            itemSpecId: { type: sql.Int, value: line.itemSpecId },
-            lotId: { type: sql.BigInt, value: line.lotId },
-            warehouseId: { type: sql.Int, value: line.warehouseId },
-            locationId: { type: sql.Int, value: line.locationId },
-            unitId: { type: sql.Int, value: line.unitId },
-            requestedQuantity: { type: sql.Decimal(18, 4), value: line.requestedQuantity },
-            issuedQuantity: { type: sql.Decimal(18, 4), value: line.issuedQuantity },
-            requestedSheetQty: { type: sql.Decimal(18, 4), value: line.requestedSheetQty },
-            issuedSheetQty: { type: sql.Decimal(18, 4), value: line.issuedSheetQty },
-            limitSheetQty: { type: sql.Decimal(18, 4), value: line.limitSheetQty },
-            palletCount: { type: sql.Decimal(18, 4), value: line.palletCount },
-            m3Quantity: { type: sql.Decimal(18, 6), value: line.m3Quantity },
-            productTypeId: { type: sql.Int, value: line.productTypeId },
-            thicknessId: { type: sql.Int, value: line.thicknessId },
-            widthId: { type: sql.Int, value: line.widthId },
-            lengthId: { type: sql.Int, value: line.lengthId },
-            remark: { type: sql.NVarChar(1000), value: line.remark },
-          },
-        });
+      if (replaceLines) {
+        const delReq = new sql.Request(tx);
+        delReq.input('goodsIssueId', sql.Int, goodsIssueId);
+        await delReq.query(`
+          DELETE FROM dbo.GoodsIssueLines
+          WHERE GoodsIssueId = @goodsIssueId
+        `);
+
+        await resolveLineLots(tx, lineSnapshots, userId);
+
+        for (const line of lineSnapshots) {
+          const lineReq = new sql.Request(tx);
+          lineReq.input('goodsIssueId', sql.Int, goodsIssueId);
+          lineReq.input('lineNum', sql.Int, line.lineNum);
+          lineReq.input('itemId', sql.Int, line.itemId);
+          lineReq.input('itemSpecId', sql.Int, line.itemSpecId);
+          lineReq.input('lotId', sql.BigInt, line.lotId);
+          lineReq.input('warehouseId', sql.Int, line.warehouseId);
+          lineReq.input('locationId', sql.Int, line.locationId);
+          lineReq.input('unitId', sql.Int, line.unitId);
+          lineReq.input('requestedQuantity', sql.Decimal(18, 4), line.requestedQuantity);
+          lineReq.input('issuedQuantity', sql.Decimal(18, 4), line.issuedQuantity);
+          lineReq.input('requestedSheetQty', sql.Decimal(18, 4), line.requestedSheetQty);
+          lineReq.input('issuedSheetQty', sql.Decimal(18, 4), line.issuedSheetQty);
+          lineReq.input('limitSheetQty', sql.Decimal(18, 4), line.limitSheetQty);
+          lineReq.input('palletCount', sql.Decimal(18, 4), line.palletCount);
+          lineReq.input('m3Quantity', sql.Decimal(18, 6), line.m3Quantity);
+          lineReq.input('productTypeId', sql.Int, line.productTypeId);
+          lineReq.input('thicknessId', sql.Int, line.thicknessId);
+          lineReq.input('widthId', sql.Int, line.widthId);
+          lineReq.input('lengthId', sql.Int, line.lengthId);
+          lineReq.input('remark', sql.NVarChar(1000), line.remark);
+
+          await lineReq.query(`
+            INSERT INTO dbo.GoodsIssueLines (
+              GoodsIssueId, LineNum, ItemId, ItemSpecId, LotId, WarehouseId, LocationId, UnitId,
+              RequestedQuantity, IssuedQuantity, RequestedSheetQty, IssuedSheetQty, LimitSheetQty,
+              PalletCount, M3Quantity, ProductTypeId, ThicknessId, WidthId, LengthId, Remark
+            )
+            VALUES (
+              @goodsIssueId, @lineNum, @itemId, @itemSpecId, @lotId, @warehouseId, @locationId, @unitId,
+              @requestedQuantity, @issuedQuantity, @requestedSheetQty, @issuedSheetQty, @limitSheetQty,
+              @palletCount, @m3Quantity, @productTypeId, @thicknessId, @widthId, @lengthId, @remark
+            )
+          `);
+        }
       }
-    }
 
-    await writeStatusHistory('GI', goodsIssueId, existing.status, existing.status, userId, 'Updated');
+      const histReq = new sql.Request(tx);
+      histReq.input('goodsIssueId', sql.Int, goodsIssueId);
+      histReq.input('status', sql.NVarChar(30), existing.status);
+      histReq.input('userId', sql.Int, userId);
+      await histReq.query(`
+        INSERT INTO dbo.DocumentStatusHistory (DocumentType, DocumentId, FromStatus, ToStatus, ChangedBy, Notes)
+        VALUES ('GI', @goodsIssueId, @status, @status, @userId, 'Updated')
+      `);
+    });
 
     const order = await getGoodsIssue(goodsIssueId);
     const lines = await getGoodsIssueLines(goodsIssueId);
@@ -725,10 +845,12 @@ router.get(
         DocumentId,
         FromStatus,
         ToStatus,
-        ChangedBy,
+        dsh.ChangedBy,
+        u.DisplayName as ChangedByName,
         ChangedAt,
         Notes
-      FROM dbo.DocumentStatusHistory
+      FROM dbo.DocumentStatusHistory dsh
+      LEFT JOIN dbo.Users u ON u.UserId = dsh.ChangedBy
       WHERE DocumentType = 'GI' AND DocumentId = @goodsIssueId
       ORDER BY ChangedAt DESC, DocumentStatusHistoryId DESC
     `, { inputs: { goodsIssueId: { type: sql.Int, value: goodsIssueId } } });
@@ -741,11 +863,35 @@ router.get(
         fromStatus: r.FromStatus,
         toStatus: r.ToStatus,
         changedBy: r.ChangedBy,
+        changedByName: r.ChangedByName,
         changedAt: r.ChangedAt,
         notes: r.Notes,
       })),
     });
   }),
+);
+
+router.post(
+  '/:id/request-approval',
+  writeRoles,
+  asyncHandler(async (req, res) => {
+    const userId = getUserId(req);
+    const goodsIssueId = parseId(req.params.id, 'goodsIssueId');
+    const steps = req.body.steps || [];
+    const result = await goodsIssueService.requestApproval(goodsIssueId, userId, steps);
+    res.json(result);
+  })
+);
+
+router.post(
+  '/:id/approve',
+  approveRoles,
+  asyncHandler(async (req, res) => {
+    const userId = getUserId(req);
+    const goodsIssueId = parseId(req.params.id, 'goodsIssueId');
+    const result = await goodsIssueService.approveGoodsIssue(goodsIssueId, userId);
+    res.json(result);
+  })
 );
 
 router.post(

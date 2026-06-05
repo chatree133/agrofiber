@@ -1,4 +1,4 @@
-import { DeleteOutlined, EditOutlined, PlusOutlined, SaveOutlined, FileExcelOutlined, SearchOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, DeleteOutlined, EditOutlined, PlusOutlined, SaveOutlined, FileExcelOutlined, SearchOutlined } from '@ant-design/icons';
 import {
   Button,
   Card,
@@ -238,11 +238,15 @@ export default function ItemForm() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-slate-800">
-          {isEdit ? 'แก้ไขข้อมูลสินค้า' : 'สร้างสินค้าใหม่'}
-        </h1>
+        <div style={{ display: "flex", alignItems: "center" }}>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate("/master/items")} style={{ marginRight: "12px" }} />
+          <div>
+            <h1 className="text-lg font-semibold text-slate-800">
+              {isEdit ? 'แก้ไขข้อมูลสินค้า' : 'สร้างสินค้าใหม่'}
+            </h1>
+          </div>
+        </div>
         <div className="flex gap-2">
-          <Button onClick={() => navigate('/master/items')}>ยกเลิก</Button>
           <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveItem} loading={saving}>
             บันทึกสินค้า
           </Button>

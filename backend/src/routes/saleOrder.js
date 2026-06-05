@@ -1,11 +1,14 @@
 import { Router } from "express";
-import { mssqlQuery, sql, mssqlTransaction } from "../lib/mssql.js";
+import { mssqlQuery, sql, mssqlTransaction, getMssqlPool } from "../lib/mssql.js";
 import { authenticate } from "../middleware/auth.js";
 import { allowRoles } from "../middleware/roles.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { salesOrderService } from "../services/sales/salesOrderService.js";
 import { documentService } from "../services/common/documentService.js";
 import { pricingResolverService } from "../services/pricing/pricingResolverService.js";
+import { wmsTaskService } from "../services/wms/wmsTaskService.js";
+import { reservationService } from "../services/inventory/reservationService.js";
+import { approvalService } from "../services/common/approvalService.js";
 
 const router = Router();
 
@@ -95,6 +98,7 @@ function mapSalesOrder(row) {
         priceListId: row.PriceListId,
         warehouseId: row.WarehouseId,
         taxType: row.TaxType,
+        taxId: row.TaxId,
         remarks: row.Remarks,
         shippingAddress: row.ShippingAddress,
         currencyCode: row.CurrencyCode,
@@ -106,6 +110,8 @@ function mapSalesOrder(row) {
         createdBy: row.CreatedBy,
         createdAt: row.CreatedAt,
         updatedAt: row.UpdatedAt,
+        deliveryOrderCount: row.DeliveryOrderCount || 0,
+        invoiceCount: row.InvoiceCount || 0,
     };
 }
 
@@ -137,6 +143,14 @@ function mapSalesOrderLine(row) {
         lineAmount: row.LineAmount,
         taxCodeId: row.TaxCodeId,
         taxAmount: row.TaxAmount,
+        productTypeCode: row.ProductTypeCode,
+        thicknessMm: row.ThicknessMm,
+        thicknessLabel: row.ThicknessLabel,
+        widthM: row.WidthM,
+        widthLabel: row.WidthLabel,
+        lengthM: row.LengthM,
+        lengthLabel: row.LengthLabel,
+        remark: row.Remark,
     };
 }
 
@@ -152,6 +166,7 @@ async function getSalesOrder(salesOrderId) {
       b.BranchName,
       so.CustomerId,
       c.CustomerCode,
+      c.TaxId,
       c.CustomerName,
       so.DocumentDate,
       so.RequiredDate,
@@ -172,7 +187,9 @@ async function getSalesOrder(salesOrderId) {
       so.GrandTotalAmount,
       so.CreatedBy,
       so.CreatedAt,
-      so.UpdatedAt
+      so.UpdatedAt,
+      (SELECT COUNT(1) FROM dbo.DeliveryOrders WHERE SalesOrderId = so.SalesOrderId AND Status != 'cancelled') AS DeliveryOrderCount,
+      (SELECT COUNT(1) FROM dbo.SalesInvoices WHERE SalesOrderId = so.SalesOrderId AND Status != 'cancelled') AS InvoiceCount
     FROM dbo.SalesOrders so
     JOIN dbo.Customers c ON c.CustomerId = so.CustomerId
     LEFT JOIN dbo.Branches b ON b.BranchId = so.BranchId
@@ -213,12 +230,24 @@ async function getSalesOrderLines(salesOrderId) {
       sol.TaxCodeId,
       sol.TaxAmount,
       sol.UnitId,
+      sol.Remark,
       u.UnitCode,
-      u.UnitName
+      u.UnitName,
+      pt.ProductTypeCode,
+      th.ThicknessMm,
+      th.ThicknessLabel,
+      w.WidthM,
+      w.WidthLabel,
+      l.LengthM,
+      l.LengthLabel
     FROM dbo.SalesOrderLines sol
     JOIN dbo.Items i ON i.ItemId = sol.ItemId
     JOIN dbo.Units u ON u.UnitId = sol.UnitId
     LEFT JOIN dbo.ItemSpecs ispec ON ispec.ItemSpecId = sol.ItemSpecId
+    LEFT JOIN dbo.ProductTypes pt ON pt.ProductTypeId = i.ProductTypeId
+    LEFT JOIN dbo.ItemThicknesses th ON th.ThicknessId = i.ThicknessId
+    LEFT JOIN dbo.ItemWidths w ON w.WidthId = i.WidthId
+    LEFT JOIN dbo.ItemLengths l ON l.LengthId = i.LengthId
     WHERE sol.SalesOrderId = @salesOrderId
     ORDER BY sol.LineNum
   `,
@@ -311,6 +340,7 @@ function buildLineSnapshots(rawLines) {
 
     for (let idx = 0; idx < rawLines.length; idx += 1) {
         const raw = rawLines[idx] || {};
+        console.log("raw", idx, raw);
         const lineNum =
             Number.isInteger(raw.lineNum) && raw.lineNum > 0
                 ? raw.lineNum
@@ -375,6 +405,8 @@ function buildLineSnapshots(rawLines) {
                         "customer_price_list",
                         "item_default",
                         "manual",
+                        "default_price_list",
+                        "discount_rule",
                     ],
                     `lines[${idx}].pricingSource`,
                 )
@@ -415,10 +447,17 @@ async function writeStatusHistory(
     toStatus,
     changedBy,
     notes,
+    tx = null,
 ) {
-    await mssqlQuery(
-        "DEFAULT",
-        `
+    const pool = tx ? null : await getMssqlPool("DEFAULT");
+    const req = new sql.Request(tx || pool);
+    req.input("documentType", sql.NVarChar(40), documentType);
+    req.input("documentId", sql.Int, documentId);
+    req.input("fromStatus", sql.NVarChar(30), fromStatus);
+    req.input("toStatus", sql.NVarChar(30), toStatus);
+    req.input("changedBy", sql.Int, changedBy);
+    req.input("notes", sql.NVarChar(1000), notes || null);
+    await req.query(`
     INSERT INTO dbo.DocumentStatusHistory (
       DocumentType,
       DocumentId,
@@ -435,18 +474,7 @@ async function writeStatusHistory(
       @changedBy,
       @notes
     )
-  `,
-        {
-            inputs: {
-                documentType: { type: sql.NVarChar(40), value: documentType },
-                documentId: { type: sql.Int, value: documentId },
-                fromStatus: { type: sql.NVarChar(30), value: fromStatus },
-                toStatus: { type: sql.NVarChar(30), value: toStatus },
-                changedBy: { type: sql.Int, value: changedBy },
-                notes: { type: sql.NVarChar(1000), value: notes || null },
-            },
-        },
-    );
+  `);
 }
 
 router.get(
@@ -619,9 +647,10 @@ router.post(
             ? String(req.body.remarks).trim()
             : null;
 
-        const status =
-            normalizeEnum(req.body.status, ["draft", "requested"], "status") || "draft";
-
+        const customerRes = await mssqlQuery('DEFAULT', 'SELECT PriceListId FROM dbo.Customers WHERE CustomerId = @customerId', {
+            inputs: { customerId: { type: sql.Int, value: customerId } }
+        });
+        const resolvedPriceListId = priceListId || customerRes[0]?.PriceListId || null;
         const lineSnapshots = buildLineSnapshots(req.body.lines);
         const totals = calculateHeaderTotals(lineSnapshots);
 
@@ -635,13 +664,53 @@ router.post(
                     documentDate,
                 );
 
+                // 1. Resolve pricing and check if approval is required
+                let requiresApproval = false;
+                const basePricingContext = {
+                    customerId,
+                    currencyCode,
+                    documentDate,
+                    warehouseId,
+                    priceListId: resolvedPriceListId,
+                };
+
+                const resolvedLines = [];
+                for (const line of lineSnapshots) {
+                    const pricingContext = {
+                        ...basePricingContext,
+                        itemId: line.itemId,
+                        itemSpecId: line.itemSpecId,
+                        quantity: line.quantity,
+                        unitId: line.unitId,
+                    };
+                    const pricing = await pricingResolverService.resolvePricing(
+                        pricingContext,
+                        tx,
+                    );
+
+                    if (line.unitPrice < pricing.finalPrice) {
+                        requiresApproval = true;
+                    }
+
+                    resolvedLines.push({
+                        line,
+                        pricing,
+                    });
+                }
+
+                // Determine final status
+                const finalStatus = req.body.status === 'requested'
+                    ? (requiresApproval ? 'requested' : 'approved')
+                    : req.body.status;
+
+
                 const headerReq = new sql.Request(tx);
                 headerReq.input("documentNo", sql.NVarChar(50), documentNo);
                 headerReq.input("branchId", sql.Int, branchId);
                 headerReq.input("customerId", sql.Int, customerId);
                 headerReq.input("documentDate", sql.Date, documentDate);
                 headerReq.input("requiredDate", sql.Date, requiredDate);
-                headerReq.input("status", sql.NVarChar(30), status);
+                headerReq.input("status", sql.NVarChar(30), finalStatus);
                 headerReq.input(
                     "shippingAddress",
                     sql.NVarChar(1000),
@@ -656,7 +725,7 @@ router.post(
                 headerReq.input("customerPoDate", sql.Date, customerPoDate);
                 headerReq.input("salesPersonId", sql.Int, salesPersonId);
                 headerReq.input("paymentTermId", sql.Int, paymentTermId);
-                headerReq.input("priceListId", sql.Int, priceListId);
+                headerReq.input("priceListId", sql.Int, resolvedPriceListId);
                 headerReq.input("warehouseId", sql.Int, warehouseId);
                 headerReq.input("taxType", sql.NVarChar(20), taxType);
                 headerReq.input("remarks", sql.NVarChar(sql.MAX), remarks);
@@ -695,117 +764,57 @@ router.post(
                 `);
                 salesOrderId = headerRes.recordset[0].SalesOrderId;
 
-                // build object context
-                const basePricingContext = {
-                    customerId,
-                    currencyCode,
-                    documentDate,
-                    warehouseId,
-                    priceListId,
-                };
-                for (const line of lineSnapshots) {
-                    const pricingContext = {
-                        ...basePricingContext,
-                        itemId: line.itemId,
-                        itemSpecId: line.itemSpecId,
-                        quantity: line.quantity,
-                        unitId: line.unitId,
-                    };
-                    const pricing = await pricingResolverService.resolvePricing(
-                        pricingContext,
-                        tx,
-                    );
+                const dbLines = [];
+                for (const item of resolvedLines) {
+                    const line = item.line;
+                    const pricing = item.pricing;
 
                     const lineReq = new sql.Request(tx);
-                    lineReq.input("salesOrderId", sql.Int, salesOrderId); // ไม่ควรใช้ salesOrderId จาก client เพราะยังไม่มีการ insert header ใน database
+                    lineReq.input("salesOrderId", sql.Int, salesOrderId);
                     lineReq.input("lineNum", sql.Int, line.lineNum);
-
-                    // itemId, itemSpecId จะไม่รับจาก client, แต่จะรับ SalesSKU มาแทน แล้วไปหามูล itemId, itemSpecId จริงๆ จาก database อีกที เพื่อป้องกันกรณีที่ client ส่งข้อมูลไม่ถูกต้องมา
                     lineReq.input("itemId", sql.Int, line.itemId);
                     lineReq.input("itemSpecId", sql.Int, line.itemSpecId);
-
-                    lineReq.input(
-                        "quantity",
-                        sql.Decimal(18, 4),
-                        line.quantity,
-                    );
-                    lineReq.input(
-                        "unitPrice",
-                        sql.Decimal(18, 4),
-                        pricing.finalPrice || line.unitPrice,
-                    );
-                    lineReq.input(
-                        "discountPercent",
-                        sql.Decimal(9, 4),
-                        pricing.discountPercent || line.discountPercent,
-                    );
-                    lineReq.input(
-                        "discountAmount",
-                        sql.Decimal(18, 4),
-                        pricing.discountAmount || line.discountAmount,
-                    );
-
-                    // taxRatePercent จะไม่รับจาก client แต่จะคำนวณใหม่จาก taxType ของ header และ taxCodeId ของ line แทน เพื่อป้องกันกรณีที่ client ส่งข้อมูลไม่ถูกต้องมา
-                    lineReq.input(
-                        "taxRatePercent",
-                        sql.Decimal(9, 4),
-                        line.taxRatePercent,
-                    );
-                    lineReq.input(
-                        "unitCostSnapshot",
-                        sql.Decimal(18, 4),
-                        pricing.unitCost ?? line.unitCostSnapshot,
-                    );
-                    lineReq.input(
-                        "pricingSource",
-                        sql.NVarChar(40),
-                        pricing.pricingSource ?? line.pricingSource,
-                    );
-                    lineReq.input(
-                        "pricingReferenceId",
-                        sql.Int,
-                        pricing.pricingReferenceId ?? line.pricingReferenceId,
-                    );
-                    lineReq.input(
-                        "marginPercentSnapshot",
-                        sql.Decimal(9, 4),
-                        line.marginPercentSnapshot,
-                    );
-                    lineReq.input(
-                        "markupPercentSnapshot",
-                        sql.Decimal(9, 4),
-                        line.markupPercentSnapshot,
-                    );
-                    lineReq.input(
-                        "lineAmount",
-                        sql.Decimal(18, 4),
-                        line.lineAmount,
-                    );
+                    lineReq.input("quantity", sql.Decimal(18, 4), line.quantity);
+                    lineReq.input("unitPrice", sql.Decimal(18, 4), line.unitPrice); // Always save line.unitPrice from frontend!
+                    lineReq.input("discountPercent", sql.Decimal(9, 4), line.discountPercent);
+                    lineReq.input("discountAmount", sql.Decimal(18, 4), line.discountAmount);
+                    lineReq.input("taxRatePercent", sql.Decimal(9, 4), line.taxRatePercent);
+                    lineReq.input("unitCostSnapshot", sql.Decimal(18, 4), pricing.unitCost ?? line.unitCostSnapshot);
+                    lineReq.input("pricingSource", sql.NVarChar(40), pricing.pricingSource ?? line.pricingSource);
+                    lineReq.input("pricingReferenceId", sql.Int, pricing.pricingReferenceId ?? line.pricingReferenceId);
+                    lineReq.input("marginPercentSnapshot", sql.Decimal(9, 4), line.marginPercentSnapshot);
+                    lineReq.input("markupPercentSnapshot", sql.Decimal(9, 4), line.markupPercentSnapshot);
+                    lineReq.input("lineAmount", sql.Decimal(18, 4), line.lineAmount);
                     lineReq.input("taxCodeId", sql.Int, line.taxCodeId);
-                    lineReq.input(
-                        "taxAmount",
-                        sql.Decimal(18, 4),
-                        line.taxAmount,
-                    );
+                    lineReq.input("taxAmount", sql.Decimal(18, 4), line.taxAmount);
                     lineReq.input("unitId", sql.Int, line.unitId);
+                    lineReq.input("remark", sql.NVarChar(1000), line.remark ? String(line.remark).trim() : null);
 
                     const lineResult = await lineReq.query(`
                       INSERT INTO dbo.SalesOrderLines (
                         SalesOrderId, LineNum, ItemId, ItemSpecId, Quantity, UnitPrice,
                         DiscountPercent, DiscountAmount, TaxRatePercent, UnitCostSnapshot,
                         PricingSource, PricingReferenceId, MarginPercentSnapshot, MarkupPercentSnapshot,
-                        LineAmount, TaxCodeId, TaxAmount, UnitId
+                        LineAmount, TaxCodeId, TaxAmount, UnitId, Remark
                       )
-                      OUTPUT INSERTED.SalesOrderLineId
+                      OUTPUT INSERTED.ItemId, INSERTED.ItemSpecId, INSERTED.Quantity, INSERTED.SalesOrderLineId
                       VALUES (
                         @salesOrderId, @lineNum, @itemId, @itemSpecId, @quantity, @unitPrice,
                         @discountPercent, @discountAmount, @taxRatePercent, @unitCostSnapshot,
                         @pricingSource, @pricingReferenceId, @marginPercentSnapshot, @markupPercentSnapshot,
-                        @lineAmount, @taxCodeId, @taxAmount, @unitId
+                        @lineAmount, @taxCodeId, @taxAmount, @unitId, @remark
                       )                      
                     `);
-                    const salesOrderLineId =
-                        lineResult.recordset[0].SalesOrderLineId;
+
+                    const record = lineResult.recordset[0];
+                    dbLines.push({
+                        ItemId: record.ItemId,
+                        ItemSpecId: record.ItemSpecId,
+                        Quantity: record.Quantity,
+                        Remark: line.remark || null
+                    });
+
+                    const salesOrderLineId = record.SalesOrderLineId;
                     await pricingResolverService.writePricingLogs(
                         salesOrderId,
                         salesOrderLineId,
@@ -814,14 +823,48 @@ router.post(
                     );
                 }
 
+                // Add Status History
                 const histReq = new sql.Request(tx);
                 histReq.input("soId", sql.Int, salesOrderId);
                 histReq.input("userId", sql.Int, userId);
-                histReq.input("status", sql.NVarChar(30), status);
+                histReq.input("status", sql.NVarChar(30), finalStatus);
                 await histReq.query(`
                   INSERT INTO dbo.DocumentStatusHistory (DocumentType, DocumentId, ToStatus, ChangedBy, Notes)
                   VALUES ('SO', @soId, @status, @userId, 'Order created')
                 `);
+
+                // Post-insert automations
+                if (finalStatus === 'approved') {
+                    // Sync stock reservations
+                    await reservationService.syncReservationsForApprovedOrder(tx, salesOrderId, dbLines, userId);
+
+                    // Create WMS Picking Task
+                    const resolvedWarehouseId = warehouseId || 1;
+                    await wmsTaskService.createTask({
+                        taskType: 'picking',
+                        referenceType: 'SO',
+                        referenceId: salesOrderId,
+                        warehouseId: resolvedWarehouseId,
+                        assignedTo: null,
+                        lines: dbLines.map(line => ({
+                            itemId: line.ItemId,
+                            itemSpecId: line.ItemSpecId,
+                            quantityRequired: line.Quantity,
+                            remark: line.Remark || null,
+                            fromLocationId: null,
+                            toLocationId: null
+                        }))
+                    }, tx);
+                } else if (finalStatus === 'requested') {
+                    // Submit for approval automatically
+                    await approvalService.createRequest({
+                        documentType: 'SO',
+                        documentId: salesOrderId,
+                        requestedBy: userId,
+                        notes: `Approval request for Sales Order ${documentNo} (sold below standard price)`,
+                        steps: []
+                    }, tx);
+                }
             });
         } catch (e) {
             if (e.message && e.message.includes("Document Series")) {
@@ -851,9 +894,32 @@ router.put(
             res.status(404).json({ message: "Sales order not found" });
             return;
         }
-        if (existing.status !== "draft") {
+        if (existing.deliveryOrderCount > 0 || existing.invoiceCount > 0) {
+            res.status(409).json({
+                message: "Cannot edit sales order because it has already been processed to a Delivery Order or Invoice.",
+            });
+            return;
+        }
+        if (["closed", "cancelled"].includes(existing.status)) {
             res.status(409).json({
                 message: `Cannot update sales order in status: ${existing.status}`,
+            });
+            return;
+        }
+
+        const activeTasks = await mssqlQuery("DEFAULT", `
+            SELECT COUNT(1) AS cnt
+            FROM dbo.WmsTasks
+            WHERE ReferenceType = 'SO'
+              AND ReferenceId = @salesOrderId
+              AND Status NOT IN ('open', 'cancelled')
+        `, {
+            inputs: { salesOrderId: { type: sql.Int, value: salesOrderId } }
+        });
+
+        if (activeTasks[0].cnt > 0) {
+            res.status(409).json({
+                message: "Cannot edit sales order because warehouse picking has already started or completed.",
             });
             return;
         }
@@ -935,207 +1001,262 @@ router.put(
             ? calculateHeaderTotals(lineSnapshots)
             : null;
 
-        await mssqlQuery(
-            "DEFAULT",
-            `
-      UPDATE dbo.SalesOrders
-      SET
-        CustomerId = COALESCE(@customerId, CustomerId),
-        BranchId = @branchId,
-        DocumentDate = COALESCE(@documentDate, DocumentDate),
-        RequiredDate = @requiredDate,
-        ShippingAddress = @shippingAddress,
-        CustomerPoNo = COALESCE(@customerPoNo, CustomerPoNo),
-        CustomerPoDate = COALESCE(@customerPoDate, CustomerPoDate),
-        SalesPersonId = COALESCE(@salesPersonId, SalesPersonId),
-        PaymentTermId = COALESCE(@paymentTermId, PaymentTermId),
-        PriceListId = COALESCE(@priceListId, PriceListId),
-        WarehouseId = COALESCE(@warehouseId, WarehouseId),
-        TaxType = COALESCE(@taxType, TaxType),
-        Remarks = COALESCE(@remarks, Remarks),
-        CurrencyCode = COALESCE(@currencyCode, CurrencyCode),
-        SubTotalAmount = COALESCE(@subTotalAmount, SubTotalAmount),
-        DiscountAmount = COALESCE(@discountAmount, DiscountAmount),
-        TaxAmount = COALESCE(@taxAmount, TaxAmount),
-        GrandTotalAmount = COALESCE(@grandTotalAmount, GrandTotalAmount),
-        UpdatedAt = SYSUTCDATETIME()
-      WHERE SalesOrderId = @salesOrderId
-    `,
-            {
-                inputs: {
-                    salesOrderId: { type: sql.Int, value: salesOrderId },
-                    customerId: { type: sql.Int, value: customerId },
-                    branchId: { type: sql.Int, value: branchId },
-                    documentDate: { type: sql.Date, value: documentDate },
-                    requiredDate: { type: sql.Date, value: requiredDate },
-                    shippingAddress: {
-                        type: sql.NVarChar(1000),
-                        value: shippingAddress,
-                    },
-                    currencyCode: { type: sql.Char(3), value: currencyCode },
-                    customerPoNo: {
-                        type: sql.NVarChar(100),
-                        value: customerPoNo,
-                    },
-                    customerPoDate: { type: sql.Date, value: customerPoDate },
-                    salesPersonId: { type: sql.Int, value: salesPersonId },
-                    paymentTermId: { type: sql.Int, value: paymentTermId },
-                    priceListId: { type: sql.Int, value: priceListId },
-                    warehouseId: { type: sql.Int, value: warehouseId },
-                    taxType: { type: sql.NVarChar(20), value: taxType },
-                    remarks: { type: sql.NVarChar(sql.MAX), value: remarks },
-                    subTotalAmount: {
-                        type: sql.Decimal(18, 4),
-                        value: totals?.subTotalAmount ?? null,
-                    },
-                    discountAmount: {
-                        type: sql.Decimal(18, 4),
-                        value: totals?.discountAmount ?? null,
-                    },
-                    taxAmount: {
-                        type: sql.Decimal(18, 4),
-                        value: totals?.taxAmount ?? null,
-                    },
-                    grandTotalAmount: {
-                        type: sql.Decimal(18, 4),
-                        value: totals?.grandTotalAmount ?? null,
-                    },
-                },
-            },
-        );
+        const customerRes = await mssqlQuery("DEFAULT", `
+            SELECT PriceListId FROM dbo.Customers WHERE CustomerId = @customerId
+        `, {
+            inputs: { customerId: { type: sql.Int, value: customerId || existing.customerId } }
+        });
+        const resolvedPriceListId = priceListId || customerRes[0]?.PriceListId || null;
 
-        if (replaceLines) {
-            await mssqlQuery(
-                "DEFAULT",
-                `
-        DELETE FROM dbo.SalesOrderLines
-        WHERE SalesOrderId = @salesOrderId
-      `,
-                {
-                    inputs: {
-                        salesOrderId: { type: sql.Int, value: salesOrderId },
-                    },
-                },
-            );
+        let finalStatus = existing.status;
+        const dbLines = [];
 
-            for (const line of lineSnapshots) {
-                await mssqlQuery(
-                    "DEFAULT",
-                    `
-          INSERT INTO dbo.SalesOrderLines (
-            SalesOrderId,
-            LineNum,
-            ItemId,
-            ItemSpecId,
-            Quantity,
-            UnitPrice,
-            DiscountPercent,
-            DiscountAmount,
-            TaxRatePercent,
-            UnitCostSnapshot,
-            PricingSource,
-            PricingReferenceId,
-            MarginPercentSnapshot,
-            MarkupPercentSnapshot,
-            LineAmount,
-            TaxAmount,
-            UnitId
-          )
-          VALUES (
-            @salesOrderId,
-            @lineNum,
-            @itemId,
-            @itemSpecId,
-            @quantity,
-            @unitPrice,
-            @discountPercent,
-            @discountAmount,
-            @taxRatePercent,
-            @unitCostSnapshot,
-            @pricingSource,
-            @pricingReferenceId,
-            @marginPercentSnapshot,
-            @markupPercentSnapshot,
-            @lineAmount,
-            @taxAmount,
-            @unitId
-          )
-        `,
-                    {
-                        inputs: {
-                            salesOrderId: {
-                                type: sql.Int,
-                                value: salesOrderId,
-                            },
-                            lineNum: { type: sql.Int, value: line.lineNum },
-                            itemId: { type: sql.Int, value: line.itemId },
-                            itemSpecId: {
-                                type: sql.Int,
-                                value: line.itemSpecId,
-                            },
-                            quantity: {
-                                type: sql.Decimal(18, 4),
-                                value: line.quantity,
-                            },
-                            unitPrice: {
-                                type: sql.Decimal(18, 4),
-                                value: line.unitPrice,
-                            },
-                            discountPercent: {
-                                type: sql.Decimal(9, 4),
-                                value: line.discountPercent,
-                            },
-                            discountAmount: {
-                                type: sql.Decimal(18, 4),
-                                value: line.discountAmount,
-                            },
-                            taxRatePercent: {
-                                type: sql.Decimal(9, 4),
-                                value: line.taxRatePercent,
-                            },
-                            unitCostSnapshot: {
-                                type: sql.Decimal(18, 4),
-                                value: line.unitCostSnapshot,
-                            },
-                            pricingSource: {
-                                type: sql.NVarChar(40),
-                                value: line.pricingSource,
-                            },
-                            pricingReferenceId: {
-                                type: sql.Int,
-                                value: line.pricingReferenceId,
-                            },
-                            marginPercentSnapshot: {
-                                type: sql.Decimal(9, 4),
-                                value: line.marginPercentSnapshot,
-                            },
-                            markupPercentSnapshot: {
-                                type: sql.Decimal(9, 4),
-                                value: line.markupPercentSnapshot,
-                            },
-                            lineAmount: {
-                                type: sql.Decimal(18, 4),
-                                value: line.lineAmount,
-                            },
-                            taxAmount: {
-                                type: sql.Decimal(18, 4),
-                                value: line.taxAmount,
-                            },
-                            unitId: { type: sql.Int, value: line.unitId },
-                        },
-                    },
+        await mssqlTransaction("DEFAULT", async (tx) => {
+            if (replaceLines) {
+                // 1. Resolve pricing and check if approval is required
+                let requiresApproval = false;
+                const basePricingContext = {
+                    customerId: customerId || existing.customerId,
+                    currencyCode: currencyCode || existing.currencyCode,
+                    documentDate: documentDate || existing.documentDate,
+                    warehouseId: warehouseId || existing.warehouseId,
+                    priceListId: resolvedPriceListId,
+                };
+
+                const resolvedLines = [];
+                for (const line of lineSnapshots) {
+                    const pricingContext = {
+                        ...basePricingContext,
+                        itemId: line.itemId,
+                        itemSpecId: line.itemSpecId,
+                        quantity: line.quantity,
+                        unitId: line.unitId,
+                    };
+                    const pricing = await pricingResolverService.resolvePricing(
+                        pricingContext,
+                        tx,
+                    );
+
+                    if (line.unitPrice < pricing.finalPrice) {
+                        requiresApproval = true;
+                    }
+
+                    resolvedLines.push({
+                        line,
+                        pricing,
+                    });
+                }
+
+                // Determine final status
+                if (existing.status !== "draft") {
+                    finalStatus = requiresApproval ? "requested" : "approved";
+                }
+
+                // 2. Update Header (within transaction)
+                const headerReq = new sql.Request(tx);
+                headerReq.input("salesOrderId", sql.Int, salesOrderId);
+                headerReq.input("customerId", sql.Int, customerId || existing.customerId);
+                headerReq.input("branchId", sql.Int, branchId);
+                headerReq.input("documentDate", sql.Date, documentDate || existing.documentDate);
+                headerReq.input("requiredDate", sql.Date, requiredDate);
+                headerReq.input("shippingAddress", sql.NVarChar(1000), shippingAddress);
+                headerReq.input("currencyCode", sql.Char(3), currencyCode || existing.currencyCode);
+                headerReq.input("customerPoNo", sql.NVarChar(100), customerPoNo);
+                headerReq.input("customerPoDate", sql.Date, customerPoDate);
+                headerReq.input("salesPersonId", sql.Int, salesPersonId);
+                headerReq.input("paymentTermId", sql.Int, paymentTermId);
+                headerReq.input("priceListId", sql.Int, resolvedPriceListId);
+                headerReq.input("warehouseId", sql.Int, warehouseId || existing.warehouseId);
+                headerReq.input("taxType", sql.NVarChar(20), taxType || existing.taxType);
+                headerReq.input("remarks", sql.NVarChar(sql.MAX), remarks);
+                headerReq.input("subTotalAmount", sql.Decimal(18, 4), totals?.subTotalAmount ?? existing.subTotalAmount);
+                headerReq.input("discountAmount", sql.Decimal(18, 4), totals?.discountAmount ?? existing.discountAmount);
+                headerReq.input("taxAmount", sql.Decimal(18, 4), totals?.taxAmount ?? existing.taxAmount);
+                headerReq.input("grandTotalAmount", sql.Decimal(18, 4), totals?.grandTotalAmount ?? existing.grandTotalAmount);
+                headerReq.input("status", sql.NVarChar(30), finalStatus);
+
+                await headerReq.query(`
+                  UPDATE dbo.SalesOrders
+                  SET
+                    CustomerId = @customerId,
+                    BranchId = @branchId,
+                    DocumentDate = @documentDate,
+                    RequiredDate = @requiredDate,
+                    ShippingAddress = @shippingAddress,
+                    CustomerPoNo = @customerPoNo,
+                    CustomerPoDate = @customerPoDate,
+                    SalesPersonId = @salesPersonId,
+                    PaymentTermId = @paymentTermId,
+                    PriceListId = @priceListId,
+                    WarehouseId = @warehouseId,
+                    TaxType = @taxType,
+                    Remarks = @remarks,
+                    CurrencyCode = @currencyCode,
+                    SubTotalAmount = @subTotalAmount,
+                    DiscountAmount = @discountAmount,
+                    TaxAmount = @taxAmount,
+                    GrandTotalAmount = @grandTotalAmount,
+                    Status = @status,
+                    UpdatedAt = SYSUTCDATETIME()
+                  WHERE SalesOrderId = @salesOrderId
+                `);
+
+                // 3. Delete existing lines
+                const deleteReq = new sql.Request(tx);
+                deleteReq.input("salesOrderId", sql.Int, salesOrderId);
+                await deleteReq.query(`
+                    DELETE FROM dbo.SalesOrderLines
+                    WHERE SalesOrderId = @salesOrderId
+                `);
+
+                // 4. Insert new lines & write pricing logs
+                for (const item of resolvedLines) {
+                    const line = item.line;
+                    const pricing = item.pricing;
+
+                    const lineReq = new sql.Request(tx);
+                    lineReq.input("salesOrderId", sql.Int, salesOrderId);
+                    lineReq.input("lineNum", sql.Int, line.lineNum);
+                    lineReq.input("itemId", sql.Int, line.itemId);
+                    lineReq.input("itemSpecId", sql.Int, line.itemSpecId);
+                    lineReq.input("quantity", sql.Decimal(18, 4), line.quantity);
+                    lineReq.input("unitPrice", sql.Decimal(18, 4), line.unitPrice);
+                    lineReq.input("discountPercent", sql.Decimal(9, 4), line.discountPercent);
+                    lineReq.input("discountAmount", sql.Decimal(18, 4), line.discountAmount);
+                    lineReq.input("taxRatePercent", sql.Decimal(9, 4), line.taxRatePercent);
+                    lineReq.input("unitCostSnapshot", sql.Decimal(18, 4), pricing.unitCost ?? line.unitCostSnapshot);
+                    lineReq.input("pricingSource", sql.NVarChar(40), pricing.pricingSource ?? line.pricingSource);
+                    lineReq.input("pricingReferenceId", sql.Int, pricing.pricingReferenceId ?? line.pricingReferenceId);
+                    lineReq.input("marginPercentSnapshot", sql.Decimal(9, 4), line.marginPercentSnapshot);
+                    lineReq.input("markupPercentSnapshot", sql.Decimal(9, 4), line.markupPercentSnapshot);
+                    lineReq.input("lineAmount", sql.Decimal(18, 4), line.lineAmount);
+                    lineReq.input("taxCodeId", sql.Int, line.taxCodeId);
+                    lineReq.input("taxAmount", sql.Decimal(18, 4), line.taxAmount);
+                    lineReq.input("unitId", sql.Int, line.unitId);
+                    lineReq.input("remark", sql.NVarChar(1000), line.remark ? String(line.remark).trim() : null);
+
+                    const lineResult = await lineReq.query(`
+                      INSERT INTO dbo.SalesOrderLines (
+                        SalesOrderId, LineNum, ItemId, ItemSpecId, Quantity, UnitPrice,
+                        DiscountPercent, DiscountAmount, TaxRatePercent, UnitCostSnapshot,
+                        PricingSource, PricingReferenceId, MarginPercentSnapshot, MarkupPercentSnapshot,
+                        LineAmount, TaxCodeId, TaxAmount, UnitId, Remark
+                      )
+                      OUTPUT INSERTED.ItemId, INSERTED.ItemSpecId, INSERTED.Quantity, INSERTED.SalesOrderLineId
+                      VALUES (
+                        @salesOrderId, @lineNum, @itemId, @itemSpecId, @quantity, @unitPrice,
+                        @discountPercent, @discountAmount, @taxRatePercent, @unitCostSnapshot,
+                        @pricingSource, @pricingReferenceId, @marginPercentSnapshot, @markupPercentSnapshot,
+                        @lineAmount, @taxCodeId, @taxAmount, @unitId, @remark
+                      )                      
+                    `);
+
+                    const record = lineResult.recordset[0];
+                    dbLines.push({
+                        ItemId: record.ItemId,
+                        ItemSpecId: record.ItemSpecId,
+                        Quantity: record.Quantity,
+                        SalesOrderLineId: record.SalesOrderLineId,
+                        Remark: line.remark || null
+                    });
+
+                    const salesOrderLineId = record.SalesOrderLineId;
+                    await pricingResolverService.writePricingLogs(
+                        salesOrderId,
+                        salesOrderLineId,
+                        pricing,
+                        tx,
+                    );
+                }
+
+                // 5. Sync stock reservations or release them, and manage WMS Tasks
+                if (finalStatus === "approved") {
+                    // Cancel existing open picking tasks
+                    const cancelTasksReq = new sql.Request(tx);
+                    cancelTasksReq.input("salesOrderId", sql.Int, salesOrderId);
+                    await cancelTasksReq.query(`
+                      UPDATE dbo.WmsTasks
+                      SET Status = 'cancelled'
+                      WHERE ReferenceType = 'SO'
+                        AND ReferenceId = @salesOrderId
+                        AND Status = 'open'
+                    `);
+
+                    await reservationService.syncReservationsForApprovedOrder(tx, salesOrderId, dbLines, userId);
+
+                    // Recreate picking task
+                    const resolvedWarehouseId = warehouseId || existing.warehouseId || 1;
+                    await wmsTaskService.createTask({
+                        taskType: 'picking',
+                        referenceType: 'SO',
+                        referenceId: salesOrderId,
+                        warehouseId: resolvedWarehouseId,
+                        assignedTo: null,
+                        lines: dbLines.map(line => ({
+                            itemId: line.ItemId,
+                            itemSpecId: line.ItemSpecId,
+                            quantityRequired: line.Quantity,
+                            remark: line.Remark || null,
+                            fromLocationId: null,
+                            toLocationId: null
+                        }))
+                    }, tx);
+                } else if (finalStatus === "requested") {
+                    // Cancel existing open picking tasks
+                    const cancelTasksReq = new sql.Request(tx);
+                    cancelTasksReq.input("salesOrderId", sql.Int, salesOrderId);
+                    await cancelTasksReq.query(`
+                      UPDATE dbo.WmsTasks
+                      SET Status = 'cancelled'
+                      WHERE ReferenceType = 'SO'
+                        AND ReferenceId = @salesOrderId
+                        AND Status = 'open'
+                    `);
+
+                    const releaseReq = new sql.Request(tx);
+                    releaseReq.input("salesOrderId", sql.Int, salesOrderId);
+                    await releaseReq.query(`
+                      UPDATE dbo.InventoryReservations
+                      SET Status = 'released'
+                      WHERE ReferenceType = 'SO'
+                        AND ReferenceId = @salesOrderId
+                        AND Status IN ('open', 'allocated', 'picked')
+                    `);
+                    
+                    await approvalService.cancelActiveRequests("SO", salesOrderId, tx);
+                    await approvalService.createRequest({
+                        documentType: "SO",
+                        documentId: salesOrderId,
+                        requestedBy: userId,
+                        notes: "Approval request for Sales Order (price modified below standard price)",
+                        steps: []
+                    }, tx);
+                }
+            }
+
+            // 6. Write status history
+            if (existing.status !== finalStatus) {
+                await writeStatusHistory(
+                    "SO",
+                    salesOrderId,
+                    existing.status,
+                    finalStatus,
+                    userId,
+                    `Updated & status changed to ${finalStatus}`,
+                    tx,
+                );
+            } else {
+                await writeStatusHistory(
+                    "SO",
+                    salesOrderId,
+                    existing.status,
+                    existing.status,
+                    userId,
+                    "Updated",
+                    tx,
                 );
             }
-        }
-
-        await writeStatusHistory(
-            "SO",
-            salesOrderId,
-            existing.status,
-            existing.status,
-            userId,
-            "Updated",
-        );
+        });
 
         const order = await getSalesOrder(salesOrderId);
         const lines = await getSalesOrderLines(salesOrderId);
@@ -1231,12 +1352,47 @@ router.post(
             res.json({ data: existing });
             return;
         }
-        if (!["draft", "approved"].includes(existing.status)) {
+        if (existing.deliveryOrderCount > 0 || existing.invoiceCount > 0) {
+            res.status(409).json({
+                message: "Cannot cancel sales order because it has already been processed to a Delivery Order or Invoice.",
+            });
+            return;
+        }
+        if (!["draft", "approved", "requested"].includes(existing.status)) {
             res.status(409).json({
                 message: `Cannot cancel sales order in status: ${existing.status}`,
             });
             return;
         }
+
+        // Active Picking Task Check
+        const activeTasks = await mssqlQuery("DEFAULT", `
+            SELECT COUNT(1) AS cnt
+            FROM dbo.WmsTasks
+            WHERE ReferenceType = 'SO'
+              AND ReferenceId = @salesOrderId
+              AND Status NOT IN ('open', 'cancelled')
+        `, {
+            inputs: { salesOrderId: { type: sql.Int, value: salesOrderId } }
+        });
+
+        if (activeTasks[0].cnt > 0) {
+            res.status(409).json({
+                message: "Cannot cancel sales order because warehouse picking has already started or completed.",
+            });
+            return;
+        }
+
+        // Cancel open picking tasks
+        await mssqlQuery("DEFAULT", `
+            UPDATE dbo.WmsTasks
+            SET Status = 'cancelled'
+            WHERE ReferenceType = 'SO'
+              AND ReferenceId = @salesOrderId
+              AND Status = 'open'
+        `, {
+            inputs: { salesOrderId: { type: sql.Int, value: salesOrderId } }
+        });
 
         await mssqlQuery(
             "DEFAULT",
@@ -1279,6 +1435,9 @@ router.post(
             userId,
             req.body?.notes ? String(req.body.notes).trim() : null,
         );
+
+        // Cancel active approval requests
+        await approvalService.cancelActiveRequests("SO", salesOrderId);
 
         const order = await getSalesOrder(salesOrderId);
         res.json({ data: order });

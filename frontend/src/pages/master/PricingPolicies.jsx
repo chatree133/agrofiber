@@ -415,6 +415,12 @@ export default function PricingPolicies() {
             key: "pricingMethodName",
             width: 150,
         },
+        {
+            title: "หน่วยนับ",
+            dataIndex: "unitCode",
+            key: "unitCode",
+            width: 100,
+        },
         { title: "สถานะ", dataIndex: "status", key: "status", width: 120 },
         {
             title: "ราคามาตรฐาน",

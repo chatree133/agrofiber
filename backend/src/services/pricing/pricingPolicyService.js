@@ -9,27 +9,27 @@ function badRequest(message) {
 
 function calculatePublishedUnitPrice(policy) {
   const standardPrice = Number(policy.StandardPrice || 0);
-  const standardCost = Number(policy.StandardCost || 0);
-  const markup = Number(policy.TargetMarkupPercent ?? 0);
-  const margin = Number(policy.TargetMarginPercent ?? 0);
+  return Number(standardPrice.toFixed(4));
+}
+
+function calculateProposedPrice(policy) {
+  const sPrice = Number(policy.StandardPrice || 0);
+  const sCost = Number(policy.StandardCost || 0);
+  const markup = Number(policy.TargetMarkupPercent || 0);
+  const margin = Number(policy.TargetMarginPercent || 0);
+
   switch (policy.PricingMethodCode) {
     case 'FIXED_PRICE':
-      return Number(standardPrice.toFixed(4));
-
+      return sPrice;
     case 'MARKUP':
-      return Number((standardCost + standardCost * (markup / 100)).toFixed(4));
-
+      return sCost + (sCost * (markup / 100));
     case 'MARGIN':
-      if (margin >= 100) {
-        throw badRequest('TargetMarginPercent must be less than 100 when using MARGIN_BASED pricing');
+      if (margin < 100) {
+        return sCost / (1 - margin / 100);
       }
-      if (standardCost <= 0) {
-        throw badRequest('StandardCost must be greater than zero when using MARGIN_BASED pricing');
-      }
-      return Number((standardCost / (1 - margin / 100)).toFixed(4));
-
+      return 0;
     default:
-      return Number(standardPrice.toFixed(4));
+      return sPrice;
   }
 }
 
@@ -39,6 +39,9 @@ export const pricingPolicyService = {
       SELECT
         ipp.ItemPricingPolicyId,
         ipp.ItemId,
+        ipp.UnitId,
+        unit.UnitCode,
+        unit.UnitName,
         ipp.ItemSpecId,
         ipp.PricingMethodId,
         pm.PricingMethodCode,
@@ -61,6 +64,7 @@ export const pricingPolicyService = {
         ipp.IsActive
       FROM dbo.ItemPricingPolicies ipp
       JOIN dbo.PricingMethods pm on pm.PricingMethodId = ipp.PricingMethodId
+      LEFT JOIN dbo.Units unit ON unit.UnitId = ipp.UnitId
       WHERE ipp.ItemPricingPolicyId = @policyId
     `;
 
@@ -68,7 +72,7 @@ export const pricingPolicyService = {
       const req = new sql.Request(tx);
       req.input('policyId', sql.Int, policyId);
       const result = await req.query(query);
-      return result.recordset[0] || null;
+      return result?.recordset?.[0] || null;
     }
 
     const rows = await mssqlQuery('DEFAULT', query, {
@@ -103,10 +107,15 @@ export const pricingPolicyService = {
     if (policy.PricingMethodCode === 'MARGIN' && policy.TargetMarginPercent === null) {
       errors.push('เปอร์เซ็นต์เป้าหมาย (TargetMarginPercent) จำเป็นสำหรับการตั้งราคาแบบมาร์จิ้น');
     }
+    if (policy.StandardPrice < policy.StandardCost) {
+      errors.push('ราคาเสนอขาย (StandardPrice) ต่ำกว่าราคาต้นทุน (StandardCost) - ขายต่ำกว่าทุน');
+    }
+
+    const proposed = calculateProposedPrice(policy);
     if ((policy.PricingMethodCode === 'MARKUP' || policy.PricingMethodCode === 'MARGIN')
       && (policy.TargetMarkupPercent !== null || policy.TargetMarginPercent !== null)
-      && policy.StandardCost < calculatePublishedUnitPrice(policy)) {
-      errors.push('ราคาต้นทุน (StandardCost) ต่ำกว่าราคาที่คำนวณด้วยเปอร์เซ็นต์ markup/margin ที่กำหนด, ราคาที่คำนวณได้คือ ' + calculatePublishedUnitPrice(policy));
+      && policy.StandardPrice < proposed) {
+      errors.push(`ราคาเสนอขาย (StandardPrice) ต่ำกว่าราคาแนะนำตามสูตร (Proposed Price: ${Number(proposed.toFixed(4))}) - ขายต่ำกว่าราคา margin/markup`);
     }
 
     return {
@@ -270,6 +279,111 @@ export const pricingPolicyService = {
       `);
 
       return { versionId, versionNo: version.VersionNo, rejectedBy: userId };
+    });
+  },
+
+  async publishVersion(versionId, userId) {
+    return mssqlTransaction('DEFAULT', async (tx) => {
+      const versionReq = new sql.Request(tx);
+      versionReq.input('versionId', sql.Int, versionId);
+      const versionRes = await versionReq.query(`
+        SELECT VersionNo, Status FROM dbo.ItemPricingPolicyVersions
+        WHERE ItemPricingPolicyVersionId = @versionId
+      `);
+      if (versionRes.recordset.length === 0) {
+        throw badRequest('Pricing policy version not found');
+      }
+      const version = versionRes.recordset[0];
+      if (version.Status !== 'approved') {
+        throw badRequest(`Cannot publish when version status is ${version.Status}`);
+      }
+
+      // 1. Create a new Price List record in dbo.PriceLists
+      const priceListReq = new sql.Request(tx);
+      const plCode = `PL_${version.VersionNo}`;
+      const plName = `สมุดราคามาตรฐาน - ${version.VersionNo}`;
+      priceListReq.input('plCode', sql.NVarChar(50), plCode);
+      priceListReq.input('plName', sql.NVarChar(255), plName);
+
+      const plRes = await priceListReq.query(`
+        INSERT INTO dbo.PriceLists (PriceListCode, PriceListName, CurrencyCode, IsActive, Priority)
+        OUTPUT INSERTED.PriceListId
+        VALUES (@plCode, @plName, 'THB', 1, 0)
+      `);
+      const priceListId = plRes.recordset[0].PriceListId;
+
+      // 2. Fetch all approved policies in this version
+      const policiesReq = new sql.Request(tx);
+      policiesReq.input('versionNo', sql.NVarChar(30), version.VersionNo);
+      const policiesRes = await policiesReq.query(`
+        SELECT 
+          ipp.ItemPricingPolicyId, ipp.ItemId, ipp.UnitId, ipp.ItemSpecId, ipp.StandardCost, ipp.CurrencyCode,
+          ipp.EffectiveFrom, ipp.EffectiveTo, ipp.TargetMarkupPercent, ipp.TargetMarginPercent,
+          pm.PricingMethodCode, ipp.StandardPrice, ipp.MinMarginPercent, ipp.MinMarkupPercent
+        FROM dbo.ItemPricingPolicies ipp
+        JOIN dbo.PricingMethods pm ON pm.PricingMethodId = ipp.PricingMethodId
+        WHERE ipp.VersionNo = @versionNo AND ipp.Status = 'approved'
+      `);
+      const policies = policiesRes.recordset;
+
+      for (const policy of policies) {
+        const unitId = policy.UnitId;
+        if (!unitId) continue; // Safety check
+
+        const unitPrice = calculatePublishedUnitPrice({
+          StandardCost: policy.StandardCost,
+          StandardPrice: policy.StandardPrice,
+          TargetMarkupPercent: policy.TargetMarkupPercent,
+          TargetMarginPercent: policy.TargetMarginPercent,
+          PricingMethodCode: policy.PricingMethodCode
+        });
+
+        // Insert into PriceListItems
+        const insertItemReq = new sql.Request(tx);
+        insertItemReq.input('priceListId', sql.Int, priceListId);
+        insertItemReq.input('itemId', sql.Int, policy.ItemId);
+        insertItemReq.input('itemSpecId', sql.Int, policy.ItemSpecId || null);
+        insertItemReq.input('unitId', sql.Int, unitId);
+        insertItemReq.input('unitPrice', sql.Decimal(18, 4), unitPrice);
+        insertItemReq.input('unitCost', sql.Decimal(18, 4), policy.StandardCost);
+        insertItemReq.input('currencyCode', sql.Char(3), policy.CurrencyCode || 'THB');
+        insertItemReq.input('effectiveFrom', sql.Date, policy.EffectiveFrom);
+        insertItemReq.input('effectiveTo', sql.Date, policy.EffectiveTo || null);
+        insertItemReq.input('pricingMethod', sql.NVarChar(30), policy.PricingMethodCode);
+        insertItemReq.input('markupPercent', sql.Decimal(9, 4), policy.TargetMarkupPercent || null);
+        insertItemReq.input('marginPercent', sql.Decimal(9, 4), policy.TargetMarginPercent || null);
+
+        await insertItemReq.query(`
+          INSERT INTO dbo.PriceListItems (
+            PriceListId, ItemId, ItemSpecId, UnitId, UnitPrice, UnitCost, CurrencyCode,
+            EffectiveFrom, EffectiveTo, IsActive, PricingMethod, MarkupPercent, MarginPercent
+          )
+          VALUES (
+            @priceListId, @itemId, @itemSpecId, @unitId, @unitPrice, @unitCost, @currencyCode,
+            @effectiveFrom, @effectiveTo, 1, @pricingMethod, @markupPercent, @marginPercent
+          )
+        `);
+
+        // Update policy status to published
+        const updatePolicyReq = new sql.Request(tx);
+        updatePolicyReq.input('policyId', sql.Int, policy.ItemPricingPolicyId);
+        await updatePolicyReq.query(`
+          UPDATE dbo.ItemPricingPolicies
+          SET Status = 'published'
+          WHERE ItemPricingPolicyId = @policyId
+        `);
+      }
+
+      // 3. Update version status to published
+      const updateVerReq = new sql.Request(tx);
+      updateVerReq.input('versionId', sql.Int, versionId);
+      await updateVerReq.query(`
+        UPDATE dbo.ItemPricingPolicyVersions
+        SET Status = 'published'
+        WHERE ItemPricingPolicyVersionId = @versionId
+      `);
+
+      return { versionId, versionNo: version.VersionNo, status: 'published', priceListId };
     });
   },
 

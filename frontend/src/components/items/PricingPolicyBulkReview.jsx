@@ -128,6 +128,13 @@ export default function PricingPolicyBulkReview({
       render: (val) => <Tag color="blue">{val}</Tag>,
     },
     {
+      title: 'หน่วยนับ',
+      dataIndex: 'unitCode',
+      key: 'unitCode',
+      width: 100,
+      render: (val) => val ? <Tag color="purple">{val}</Tag> : '-',
+    },
+    {
       title: 'ราคาทุนมาตรฐาน',
       dataIndex: 'standardCost',
       key: 'standardCost',

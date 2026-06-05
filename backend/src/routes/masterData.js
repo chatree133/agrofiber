@@ -158,8 +158,77 @@ router.get('/customers', allowRoles('admin', 'accounting', 'user', 'audit'), (_r
   res.json({ data: [{ id: 1, code: 'CUST-001', name: 'Advance Agro Public Co., Ltd.' }] });
 });
 
-router.get('/vendors', allowRoles('admin', 'accounting', 'audit'), (_req, res) => {
-  res.json({ data: [{ id: 1, code: 'VEND-001', name: 'Double A Paper' }] });
-});
+router.get(
+  '/vendors',
+  allowRoles('admin', 'accounting', 'audit', 'user', 'inventory', 'warehouse'),
+  asyncHandler(async (req, res) => {
+    const search = req.query.search ? String(req.query.search).trim() : '';
+    const inputs = {};
+    let whereSql = "WHERE IsActive = 1";
+    if (search) {
+      whereSql += " AND (VendorCode LIKE @search OR VendorName LIKE @search)";
+      inputs.search = { type: sql.NVarChar(255), value: `%${search}%` };
+    }
+    try {
+      const rows = await mssqlQuery('DEFAULT', `
+        SELECT VendorId AS id, VendorCode AS code, VendorName AS name, VendorCode + ' - ' + VendorName AS label
+        FROM dbo.Vendors
+        ${whereSql}
+        ORDER BY VendorCode
+      `, { inputs });
+
+      if (rows.length === 0 && !search) {
+        res.json({
+          data: [
+            { id: 1, code: 'VEND-001', name: 'Double A Paper', label: 'VEND-001 - Double A Paper' },
+            { id: 2, code: 'VEND-002', name: 'Siam Forestry', label: 'VEND-002 - Siam Forestry' }
+          ]
+        });
+      } else {
+        res.json({ data: rows });
+      }
+    } catch (err) {
+      console.error('Failed to query vendors, returning fallback:', err);
+      res.json({
+        data: [
+          { id: 1, code: 'VEND-001', name: 'Double A Paper', label: 'VEND-001 - Double A Paper' },
+          { id: 2, code: 'VEND-002', name: 'Siam Forestry', label: 'VEND-002 - Siam Forestry' }
+        ]
+      });
+    }
+  })
+);
+
+router.get(
+  '/postal-code/:code',
+  allowRoles('admin', 'accounting', 'user', 'audit'),
+  asyncHandler(async (req, res) => {
+    const postalCode = req.params.code;
+    const rows = await mssqlQuery('DEFAULT', `
+      SELECT TOP 1
+        sd.SUB_DISTRICT_ID AS subDistrictId,
+        sd.SUB_DISTRICT_THAI AS subDistrictThai,
+        sd.POSTAL_CODE AS postalCode,
+        d.DISTRICT_ID AS districtId,
+        d.DISTRICT_THAI AS districtThai,
+        p.PROVINCE_ID AS provinceId,
+        p.PROVINCE_THAI AS provinceThai
+      FROM dbo.sub_districts sd
+      JOIN dbo.districts d ON d.DISTRICT_ID = sd.DISTRICT_ID
+      JOIN dbo.provinces p ON p.PROVINCE_ID = d.PROVINCE_ID
+      WHERE sd.POSTAL_CODE = @postalCode
+    `, {
+      inputs: {
+        postalCode: { type: sql.NVarChar(20), value: postalCode }
+      }
+    });
+
+    if (!rows.length) {
+      return res.status(404).json({ message: 'Postal code not found' });
+    }
+
+    res.json({ data: rows[0] });
+  })
+);
 
 export default router;

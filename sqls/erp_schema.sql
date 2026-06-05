@@ -858,6 +858,7 @@ CREATE TABLE dbo.SalesOrderLines (
     PricingStatus NVARCHAR(30) NOT NULL DEFAULT 'PENDING',
     ResolvedAt DATETIME2 NULL,
     PricingResolvedBy NVARCHAR(100) NULL,
+    Remark NVARCHAR(1000) NULL,
     CONSTRAINT UQ_SalesOrderLines UNIQUE (SalesOrderId, LineNum),
     CONSTRAINT FK_SalesOrderLines_SalesOrders FOREIGN KEY (SalesOrderId) REFERENCES dbo.SalesOrders(SalesOrderId),
     CONSTRAINT FK_SalesOrderLines_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
@@ -1405,6 +1406,15 @@ CREATE TABLE dbo.WmsTaskTypes (
     TaskTypeName NVARCHAR(100) NOT NULL,
     IsActive BIT NOT NULL DEFAULT 1
 );
+CREATE TABLE dbo.WmsWaves (
+    WmsWaveId INT IDENTITY(1,1) PRIMARY KEY,
+    WaveNo NVARCHAR(50) NOT NULL,
+    Status NVARCHAR(30) NOT NULL DEFAULT 'open',
+    CreatedBy INT NOT NULL,
+    CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CompletedAt DATETIME2 NULL,
+    CONSTRAINT FK_WmsWaves_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users(UserId)
+);
 
 CREATE TABLE dbo.WmsTasks (
     WmsTaskId BIGINT IDENTITY(1,1) PRIMARY KEY,
@@ -1416,9 +1426,11 @@ CREATE TABLE dbo.WmsTasks (
     Status NVARCHAR(30) NOT NULL DEFAULT 'open',
     CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     CompletedAt DATETIME2 NULL,
+    WaveId INT NULL,
     CONSTRAINT FK_WmsTasks_TaskTypes FOREIGN KEY (TaskType) REFERENCES dbo.WmsTaskTypes(TaskTypeCode),
     CONSTRAINT FK_WmsTasks_Warehouses FOREIGN KEY (WarehouseId) REFERENCES dbo.Warehouses(WarehouseId),
-    CONSTRAINT FK_WmsTasks_Users FOREIGN KEY (AssignedTo) REFERENCES dbo.Users(UserId)
+    CONSTRAINT FK_WmsTasks_Users FOREIGN KEY (AssignedTo) REFERENCES dbo.Users(UserId),
+    CONSTRAINT FK_WmsTasks_WmsWaves FOREIGN KEY (WaveId) REFERENCES dbo.WmsWaves(WmsWaveId)
 );
 
 CREATE TABLE dbo.WmsTaskLines (
@@ -1433,6 +1445,7 @@ CREATE TABLE dbo.WmsTaskLines (
     ToLocationId INT NULL,
     QuantityRequired DECIMAL(18,4) NOT NULL,
     QuantityCompleted DECIMAL(18,4) NOT NULL DEFAULT 0,
+    Remark NVARCHAR(1000) NULL,
     CONSTRAINT FK_WmsTaskLines_WmsTasks FOREIGN KEY (WmsTaskId) REFERENCES dbo.WmsTasks(WmsTaskId),
     CONSTRAINT FK_WmsTaskLines_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
     CONSTRAINT FK_WmsTaskLines_ItemSpecs FOREIGN KEY (ItemSpecId) REFERENCES dbo.ItemSpecs(ItemSpecId),
@@ -1747,7 +1760,9 @@ VALUES
     ('CUTTING_PICK', N'เบิกตัด', 'goods_issue', 0, 0),
     ('REPAIR_PICK', N'เบิกซ่อม', 'goods_issue', 0, 1),
     ('OLD_STOCK_PICK', N'เบิกทึบเก่า', 'goods_issue', 0, 1),
-    ('OTHER_PICK', N'เบิกอื่นๆ', 'goods_issue', 0, 1);
+    ('OTHER_PICK', N'เบิกอื่นๆ', 'goods_issue', 0, 1),
+    ('CLAIM', N'เบิกชดเชยลูกค้า', 'goods_issue', 1, 1),
+    ('SAMPLE', N'เบิกตัวอย่าง', 'goods_issue', 0, 1);
 
 INSERT INTO dbo.GoodsReceiptTypes (GoodsReceiptTypeCode, GoodsReceiptTypeName, MovementTypeCode, RequiresVendor, RequiresProductionOrder, RequiresApproval)
 VALUES

@@ -1,4 +1,4 @@
-import { sql } from "../../lib/mssql.js";
+import { sql, getMssqlPool } from "../../lib/mssql.js";
 import { calculateMargin, calculateMarkup } from "./pricingUtils.js";
 
 function buildPricingResult(data = {}) {
@@ -24,7 +24,6 @@ function buildPricingResult(data = {}) {
 export const pricingResolverService = {
     async resolvePricing(context, tx) {
         const basePrice = await this.resolveBasePrice(context, tx);
-
         let pricingResult = {
             basePrice: Number(basePrice.unitPrice || 0), //ราคาก่อนปรับส่วนลดหรือโปรโมชั่นใดๆ
 
@@ -41,7 +40,7 @@ export const pricingResolverService = {
             pricingMethod: basePrice.pricingMethod, //วิธีการคำนวณราคาจากต้นทุน เช่น FIXED_PRICE, MARKUP, MARGIN, DISCOUNT_PERCENT, DISCOUNT_AMOUNT
 
             discountPercent: 0, //ส่วนลดเป็นเปอร์เซ็นต์ที่ปรับจากราคาฐาน
- 
+
             discountAmount: 0, //ส่วนลดเป็นจำนวนเงินที่ปรับจากราคาฐาน
 
             stopProcessing: basePrice.stopProcessing ?? false, //ตัวแปรที่บ่งบอกว่าหลังจากนี้จะหยุดการคำนวณราคาเพิ่มเติมหรือไม่ เช่น หยุดถ้าราคาถูกกำหนดมาจากสัญญาและไม่ต้องการให้มีส่วนลดเพิ่มเติม
@@ -95,7 +94,7 @@ export const pricingResolverService = {
         // 3 Price List
 
         const contractPrice = await this.findContractPrice(context, tx);
-
+        console.log("contractPrice", contractPrice);
         if (contractPrice) {
             // return this.applyPricingMethod(contractPrice);
             // ฉันจะคุมว่่า ราคาที่ได้จากสัญญา UnitPrice คือราคาหลังจากที่ถูกปรับด้วยวิธีการต่างๆ ตามที่กำหนดในสัญญาแล้ว ดังนั้นจะ return ทันทีโดยไม่ต้องผ่าน applyPricingMethod อีกครั้ง เพราะมันจะทำให้ราคาที่ได้ผิดพลาดได้ถ้า applyPricingMethod ถูกใช้ซ้ำอีกครั้งกับราคาที่ผ่านการปรับมาแล้ว
@@ -106,7 +105,7 @@ export const pricingResolverService = {
         // ในขณะที่ findPriceListPrice จะค้นหาราคาจากรายการราคาทั่วไปที่ไม่ได้เชื่อมโยงกับกลุ่มลูกค้าโดยตรง ดังนั้น findCustomerPrice จะมีความเฉพาะเจาะจงมากกว่า findPriceListPrice เพราะมันพิจารณาถึงกลุ่มราคาของลูกค้าในการค้นหาราคา
         // ในขณะที่ findPriceListPrice จะค้นหาราคาที่เป็นมาตรฐานสำหรับสินค้านั้นๆ โดยไม่คำนึงถึงกลุ่มลูกค้า
         const customerPrice = await this.findCustomerPrice(context, tx);
-
+        console.log("customerPrice", customerPrice);
         if (customerPrice) {
             // return this.applyPricingMethod(customerPrice);
             // เช่นเดียวกับ contractPrice ฉันจะคุมว่่า ราคาที่ได้จาก customerPrice UnitPrice คือราคาหลังจากที่ถูกปรับด้วยวิธีการต่างๆ ตามที่กำหนดในกลุ่มราคาของลูกค้าแล้ว ดังนั้นจะ return ทันทีโดยไม่ต้องผ่าน applyPricingMethod อีกครั้ง เพราะมันจะทำให้ราคาที่ได้ผิดพลาดได้ถ้า applyPricingMethod ถูกใช้ซ้ำอีกครั้งกับราคาที่ผ่านการปรับมาแล้ว
@@ -114,7 +113,7 @@ export const pricingResolverService = {
         }
 
         const priceListPrice = await this.findPriceListPrice(context, tx);
-
+        console.log("priceListPrice", priceListPrice);
         if (priceListPrice) {
             // return this.applyPricingMethod(priceListPrice);
             // เช่นเดียวกับ contractPrice และ customerPrice ฉันจะคุมว่่า ราคาที่ได้จาก priceListPrice UnitPrice คือราคาหลังจากที่ถูกปรับด้วยวิธีการต่างๆ ตามที่กำหนดในรายการราคาแล้ว ดังนั้นจะ return ทันทีโดยไม่ต้องผ่าน applyPricingMethod อีกครั้ง เพราะมันจะทำให้ราคาที่ได้ผิดพลาดได้ถ้า applyPricingMethod ถูกใช้ซ้ำอีกครั้งกับราคาที่ผ่านการปรับมาแล้ว
@@ -169,7 +168,8 @@ export const pricingResolverService = {
         // ราคาที่เก็บไว้ใน CustomerPriceContractLines ถูกจัดเก็บเป็น UnitPrice หลังจากปรับตาม PricingMethod แล้ว
         const { customerId, itemId, itemSpecId, quantity, documentDate, unitId } = context;
 
-        const req = new sql.Request(tx);
+        const pool = tx ? null : await getMssqlPool('DEFAULT');
+        const req = new sql.Request(tx || pool);
 
         req.input("CustomerId", sql.Int, customerId);
 
@@ -279,7 +279,7 @@ export const pricingResolverService = {
                     cpc.EffectiveFrom DESC
             `);
 
-        const row = result.recordset[0];
+        const row = result?.recordset?.[0];
 
         if (!row) return null;
 
@@ -290,7 +290,8 @@ export const pricingResolverService = {
         // ราคาที่เก็บไว้ใน PriceListItems ถูกจัดเก็บเป็น UnitPrice หลังจากปรับตาม PricingMethod แล้ว
         const { customerId, itemId, itemSpecId, quantity, documentDate, unitId } = context;
 
-        const req = new sql.Request(tx);
+        const pool = tx ? null : await getMssqlPool('DEFAULT');
+        const req = new sql.Request(tx || pool);
 
         req.input("CustomerId", sql.Int, customerId);
 
@@ -403,7 +404,7 @@ export const pricingResolverService = {
                     pli.EffectiveFrom DESC
             `);
 
-        const row = result.recordset[0];
+        const row = result?.recordset?.[0];
 
         if (!row) return null;
 
@@ -414,7 +415,8 @@ export const pricingResolverService = {
         // ราคาที่เก็บไว้ใน PriceListItems ถูกจัดเก็บเป็น UnitPrice หลังจากปรับตาม PricingMethod แล้ว
         const { itemId, itemSpecId, quantity, documentDate, unitId, priceListId } = context;
 
-        const req = new sql.Request(tx);
+        const pool = tx ? null : await getMssqlPool('DEFAULT');
+        const req = new sql.Request(tx || pool);
 
         req.input("ItemId", sql.Int, itemId);
 
@@ -478,7 +480,10 @@ export const pricingResolverService = {
                         pli.PriceListId
 
                 WHERE
-                    pli.PriceListId = @PriceListId
+                    (
+                        @PriceListId IS NOT NULL AND pli.PriceListId = @PriceListId
+                        OR @PriceListId IS NULL AND pl.CustomerPriceGroupId IS NULL
+                    )
 
                     AND pli.ItemId = @ItemId
 
@@ -524,7 +529,7 @@ export const pricingResolverService = {
                     
             `);
 
-        const row = result.recordset[0];
+        const row = result?.recordset?.[0];
 
         if (!row) return null;
 
@@ -547,7 +552,8 @@ export const pricingResolverService = {
         // แต่ยังยังไม่มี login volume discount และ promotion ต่างๆ ที่จะตามมาในอนาคต ซึ่งจะต้องมีการปรับปรุงฟังก์ชันนี้ให้รองรับการคำนวณส่วนลดและโปรโมชั่นในระดับบรรทัดเพิ่มเติมจากกฎส่วนลดที่เก็บในตาราง DiscountRules ด้วย
         const { customerId, itemId, quantity, documentDate } = context;
 
-        const req = new sql.Request(tx);
+        const pool = tx ? null : await getMssqlPool('DEFAULT');
+        const req = new sql.Request(tx || pool);
 
         req.input("CustomerId", sql.Int, customerId);
 
@@ -612,11 +618,11 @@ export const pricingResolverService = {
 
             ORDER BY
                 dr.Priority DESC,
-                dr.MinQuantity DESC,
+                dr.MinOrderAmount DESC,
                 dr.EffectiveFrom DESC
         `);
 
-        const rule = result.recordset[0];
+        const rule = result?.recordset?.[0];
 
         // no discount
         if (!rule) {
@@ -694,8 +700,10 @@ export const pricingResolverService = {
             ...pricingResult.adjustments,
         ];
 
+        const pool = tx ? null : await getMssqlPool('DEFAULT');
+
         for (const adjustment of adjustments) {
-            const req = new sql.Request(tx);
+            const req = new sql.Request(tx || pool);
 
             req.input("SalesOrderId", sql.Int, salesOrderId);
 

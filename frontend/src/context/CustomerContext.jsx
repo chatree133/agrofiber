@@ -50,6 +50,11 @@ export function CustomerProvider({ children }) {
     await ApiClient.delete(`/api/customers/${customerId}/addresses/${addressId}`, { headers: authHeaders });
   };
 
+  const lookupPostalCode = async (code) => {
+    const data = await ApiClient.get(`/api/master-data/postal-code/${code}`, { headers: authHeaders });
+    return data.data;
+  };
+
   const getContacts = async (customerId) => {
     const data = await ApiClient.get(`/api/customers/${customerId}/contacts`, { headers: authHeaders });
     return data.data;
@@ -79,6 +84,7 @@ export function CustomerProvider({ children }) {
     createAddress,
     updateAddress,
     deleteAddress,
+    lookupPostalCode,
     getContacts,
     createContact,
     updateContact,

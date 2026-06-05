@@ -117,11 +117,6 @@ export const appMenus = [
         allowedRoles: ["admin", "user"],
         children: [
             {
-                key: "/deliveryorder/create",
-                label: "สร้างใบส่งสินค้า",
-                allowedRoles: ["admin", "user"],
-            },
-            {
                 key: "/deliveryorder/list",
                 label: "รายการใบส่งสินค้า",
                 allowedRoles: ["admin", "user", "audit"],
@@ -148,6 +143,16 @@ export const appMenus = [
                 key: "/inventory/transfer",
                 label: "เคลื่อนย้ายสินค้า",
                 allowedRoles: ["admin", "user"],
+            },
+            {
+                key: "/inventory/goods-receipts",
+                label: "รับสินค้า (Goods Receipt)",
+                allowedRoles: ["admin", "accounting", "user", "audit"],
+            },
+            {
+                key: "/inventory/goods-issues",
+                label: "จ่ายสินค้า (Goods Issue)",
+                allowedRoles: ["admin", "accounting", "user", "audit"],
             },
             {
                 key: "/inventory/reports",
@@ -214,6 +219,11 @@ export const appMenus = [
                 key: "/master/workflows",
                 label: "ตั้งค่า Workflow",
                 allowedRoles: ["admin"],
+            },
+            {
+                key: "/master/transaction-types",
+                label: "ประเภทธุรกรรมคลัง",
+                allowedRoles: ["admin", "user", "accounting"],
             },
             {
                 key: "/master/customers",

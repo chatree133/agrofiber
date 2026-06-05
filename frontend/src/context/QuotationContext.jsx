@@ -17,9 +17,9 @@ export function QuotationProvider({ children }) {
     return res.data;
   };
 
-  const getPriceLookup = async (customerId, itemId, unitId) => {
+  const getPriceLookup = async (customerId, itemId, unitId, itemSpecId = null) => {
     const res = await ApiClient.get(`/api/quotations/price-lookup`, {
-      params: { customerId, itemId, unitId },
+      params: { customerId, itemId, unitId, itemSpecId },
       headers: authHeaders
     });
     return res.data;

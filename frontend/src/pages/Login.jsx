@@ -24,15 +24,19 @@ export default function Login() {
     }
   };
 
+
   return (
     <div className="grid min-h-screen place-items-center bg-slate-100 px-4">
       <Card className="w-full max-w-[420px] shadow-lg">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 grid h-20 w-20 place-items-center rounded-full bg-blue-800 text-sm font-bold italic text-white">
-            Double A
+          <div className="mx-auto mb-4 grid h-20 w-20 place-items-center overflow-hidden rounded-full border-2 border-sky-300 bg-white p-2">
+            <img
+              src="https://www.agro-thailand.com/wp-content/uploads/2025/12/logo03.png"
+              alt="Agro Thailand"
+              className="h-full w-full object-contain"
+            />
           </div>
-          <h1 className="text-2xl font-bold">Admin System</h1>
-          <p className="mt-1 text-slate-500">เข้าสู่ระบบ ERP</p>
+          <h1 className="text-2xl font-bold">เข้าสู่ระบบ ERP System</h1>
         </div>
 
         <Form form={form} layout="vertical" onFinish={onFinish}>

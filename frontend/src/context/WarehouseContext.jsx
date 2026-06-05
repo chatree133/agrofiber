@@ -26,11 +26,35 @@ export function WarehouseProvider({ children }) {
     await ApiClient.delete(`/api/warehouses/${id}`, { headers: authHeaders });
   };
 
+  const getWarehouseLocationsRaw = async (warehouseId) => {
+    const res = await ApiClient.get(`/api/warehouses/${warehouseId}/locations-raw`, { headers: authHeaders });
+    return res.data;
+  };
+
+  const createWarehouseLocation = async (warehouseId, payload) => {
+    const res = await ApiClient.post(`/api/warehouses/${warehouseId}/locations`, payload, { headers: authHeaders });
+    return res.data;
+  };
+
+  const updateWarehouseLocation = async (warehouseId, locationId, payload) => {
+    const res = await ApiClient.put(`/api/warehouses/${warehouseId}/locations/${locationId}`, payload, { headers: authHeaders });
+    return res.data;
+  };
+
+  const deleteWarehouseLocation = async (warehouseId, locationId) => {
+    const res = await ApiClient.delete(`/api/warehouses/${warehouseId}/locations/${locationId}`, { headers: authHeaders });
+    return res.data;
+  };
+
   const value = useMemo(() => ({
     getWarehouses,
     createWarehouse,
     updateWarehouse,
-    deleteWarehouse
+    deleteWarehouse,
+    getWarehouseLocationsRaw,
+    createWarehouseLocation,
+    updateWarehouseLocation,
+    deleteWarehouseLocation
   }), [authHeaders]);
 
   return (

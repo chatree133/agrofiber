@@ -5,6 +5,7 @@ import {
   SaveOutlined,
   FileExcelOutlined,
   SearchOutlined,
+  ArrowLeftOutlined,
 } from '@ant-design/icons';
 import {
   Button,
@@ -289,13 +290,15 @@ export default function CompanyForm() {
   return (
     <div className="space-y-4">
       <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
-        <div>
-          <h1 className="text-lg font-semibold text-slate-800">
-            {isEdit ? 'แก้ไขบริษัท' : 'เพิ่มบริษัทใหม่'}
-          </h1>
+        <div style={{ display: "flex", alignItems: "center" }}>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate("/settings/company")} style={{ marginRight: "12px" }} />
+          <div>
+            <h1 className="text-lg font-semibold text-slate-800">
+              {isEdit ? 'แก้ไขบริษัท' : 'เพิ่มบริษัทใหม่'}
+            </h1>
+          </div>
         </div>
         <Space>
-          <Button onClick={() => navigate('/settings/company')}>ยกเลิก</Button>
           <Button
             type="primary"
             icon={<SaveOutlined />}

@@ -12,6 +12,18 @@ export function ItemProvider({ children }) {
     return data;
   };
 
+  const searchSkus = async (searchVal, page = 1, pageSize = 20) => {
+    const res = await ApiClient.get('/api/items/skus', {
+      params: {
+        search: searchVal,
+        page,
+        pageSize
+      },
+      headers: authHeaders
+    });
+    return res.data;
+  };
+
   const getItem = async (id) => {
     const data = await ApiClient.get(`/api/items/${id}`, { headers: authHeaders });
     return data.data;
@@ -118,8 +130,29 @@ export function ItemProvider({ children }) {
     return data.data;
   };
 
+  const getPriceLists = async () => {
+    const data = await ApiClient.get('/api/items/price-lists/list', { headers: authHeaders });
+    return data.data;
+  };
+
+  const getPriceListItems = async (priceListId) => {
+    const data = await ApiClient.get(`/api/items/price-lists/${priceListId}/items`, { headers: authHeaders });
+    return data.data;
+  };
+
+  const togglePriceList = async (priceListId, isActive) => {
+    const data = await ApiClient.put(`/api/items/price-lists/${priceListId}/toggle`, { isActive }, { headers: authHeaders });
+    return data.data;
+  };
+
+  const togglePriceListItem = async (priceListItemId, isActive) => {
+    const data = await ApiClient.put(`/api/items/price-lists/items/${priceListItemId}/toggle`, { isActive }, { headers: authHeaders });
+    return data.data;
+  };
+
   const value = useMemo(() => ({
     getItems,
+    searchSkus,
     getItem,
     createItem,
     updateItem,
@@ -139,6 +172,10 @@ export function ItemProvider({ children }) {
     requestItemPricingPolicyApproval,
     approveItemPricingPolicy,
     publishItemPricingPolicy,
+    getPriceLists,
+    getPriceListItems,
+    togglePriceList,
+    togglePriceListItem,
   }), [authHeaders]);
 
   return (

@@ -95,7 +95,9 @@ function mapGoodsReceipt(row) {
     remark: row.Remark,
     postedAt: row.PostedAt,
     postedBy: row.PostedBy,
+    postedByName: row.PostedByName,
     createdBy: row.CreatedBy,
+    createdByName: row.CreatedByName,
     createdAt: row.CreatedAt,
     updatedAt: row.UpdatedAt,
   };
@@ -112,6 +114,7 @@ function mapGoodsReceiptLine(row) {
     itemSpecId: row.ItemSpecId,
     specCode: row.SpecCode,
     specName: row.SpecName,
+    salesSKU: row.SalesSKU,
     lotId: row.LotId,
     lotNo: row.LotNo,
     warehouseId: row.WarehouseId,
@@ -128,8 +131,14 @@ function mapGoodsReceiptLine(row) {
     m3Quantity: row.M3Quantity,
     productTypeId: row.ProductTypeId,
     thicknessId: row.ThicknessId,
+    thicknessMm: row.ThicknessMm,
+    thicknessLabel: row.ThicknessLabel,
     widthId: row.WidthId,
+    widthMm: row.WidthM ? Number(row.WidthM) * 1000 : null,
+    widthLabel: row.WidthLabel,
     lengthId: row.LengthId,
+    lengthMm: row.LengthM ? Number(row.LengthM) * 1000 : null,
+    lengthLabel: row.LengthLabel,
     unitCostSnapshot: row.UnitCostSnapshot,
     remark: row.Remark,
   };
@@ -165,7 +174,9 @@ async function getGoodsReceipt(goodsReceiptId) {
       gr.Remark,
       gr.PostedAt,
       gr.PostedBy,
+      u_post.DisplayName as PostedByName,
       gr.CreatedBy,
+      u_create.DisplayName as CreatedByName,
       gr.CreatedAt,
       gr.UpdatedAt
     FROM dbo.GoodsReceipts gr
@@ -174,6 +185,8 @@ async function getGoodsReceipt(goodsReceiptId) {
     LEFT JOIN dbo.Vendors v ON v.VendorId = gr.VendorId
     LEFT JOIN dbo.Customers c ON c.CustomerId = gr.CustomerId
     LEFT JOIN dbo.Branches b ON b.BranchId = gr.BranchId
+    LEFT JOIN dbo.Users u_post ON u_post.UserId = gr.PostedBy
+    LEFT JOIN dbo.Users u_create ON u_create.UserId = gr.CreatedBy
     WHERE gr.GoodsReceiptId = @goodsReceiptId
   `, { inputs: { goodsReceiptId: { type: sql.Int, value: goodsReceiptId } } });
 
@@ -190,10 +203,11 @@ async function getGoodsReceiptLines(goodsReceiptId) {
       i.ItemCode,
       i.ItemName,
       grl.ItemSpecId,
+      ispec.SalesSKU,
       ispec.SpecCode,
       ispec.SpecName,
       grl.LotId,
-      grl.LotNo,
+      COALESCE(l.LotNo, grl.LotNo) AS LotNo,
       grl.WarehouseId,
       w.WarehouseCode,
       w.WarehouseName,
@@ -208,16 +222,26 @@ async function getGoodsReceiptLines(goodsReceiptId) {
       grl.M3Quantity,
       grl.ProductTypeId,
       grl.ThicknessId,
+      th.ThicknessMm,
+      th.ThicknessLabel,
       grl.WidthId,
+      wd.WidthM,
+      wd.WidthLabel,
       grl.LengthId,
+      ln.LengthM,
+      ln.LengthLabel,
       grl.UnitCostSnapshot,
       grl.Remark
     FROM dbo.GoodsReceiptLines grl
     JOIN dbo.Items i ON i.ItemId = grl.ItemId
     JOIN dbo.Units u ON u.UnitId = grl.UnitId
     LEFT JOIN dbo.ItemSpecs ispec ON ispec.ItemSpecId = grl.ItemSpecId
+    LEFT JOIN dbo.Lots l ON l.LotId = grl.LotId
     LEFT JOIN dbo.Warehouses w ON w.WarehouseId = grl.WarehouseId
     LEFT JOIN dbo.WarehouseLocations wl ON wl.LocationId = grl.LocationId
+    LEFT JOIN dbo.ItemThicknesses th ON th.ThicknessId = grl.ThicknessId
+    LEFT JOIN dbo.ItemWidths wd ON wd.WidthId = grl.WidthId
+    LEFT JOIN dbo.ItemLengths ln ON ln.LengthId = grl.LengthId
     WHERE grl.GoodsReceiptId = @goodsReceiptId
     ORDER BY grl.LineNum
   `, { inputs: { goodsReceiptId: { type: sql.Int, value: goodsReceiptId } } });
@@ -287,6 +311,33 @@ function calculateHeaderTotals(lines) {
   return { receivedSheetTotal, palletCountTotal, m3Total };
 }
 
+async function resolveLineLots(tx, lineSnapshots, userId) {
+  for (const line of lineSnapshots) {
+    if (!line.lotId && line.lotNo) {
+      const res = await tx.request()
+        .input('itemId', sql.Int, line.itemId)
+        .input('lotNo', sql.NVarChar(80), line.lotNo)
+        .query(`
+          SELECT LotId FROM dbo.Lots WHERE ItemId = @itemId AND LotNo = @lotNo
+        `);
+      if (res.recordset.length > 0) {
+        line.lotId = res.recordset[0].LotId;
+      } else {
+        const ins = await tx.request()
+          .input('itemId', sql.Int, line.itemId)
+          .input('lotNo', sql.NVarChar(80), line.lotNo)
+          .input('createdBy', sql.Int, userId)
+          .query(`
+            INSERT INTO dbo.Lots (ItemId, LotNo, QualityStatus, CreatedBy)
+            OUTPUT INSERTED.LotId
+            VALUES (@itemId, @lotNo, 'approved', @createdBy)
+          `);
+        line.lotId = ins.recordset[0].LotId;
+      }
+    }
+  }
+}
+
 function buildLineSnapshots(rawLines) {
   if (!Array.isArray(rawLines) || !rawLines.length) throw badRequest('lines is required');
   const lines = [];
@@ -351,6 +402,117 @@ async function writeStatusHistory(documentType, documentId, fromStatus, toStatus
     },
   });
 }
+
+router.get(
+  '/types',
+  readRoles,
+  asyncHandler(async (req, res) => {
+    const rows = await mssqlQuery('DEFAULT', `
+      SELECT GoodsReceiptTypeId, GoodsReceiptTypeCode, GoodsReceiptTypeName, MovementTypeCode, RequiresVendor, RequiresProductionOrder, RequiresApproval, IsActive
+      FROM dbo.GoodsReceiptTypes
+      ORDER BY GoodsReceiptTypeId
+    `);
+    res.json({
+      data: rows.map(r => ({
+        goodsReceiptTypeId: r.GoodsReceiptTypeId,
+        goodsReceiptTypeCode: r.GoodsReceiptTypeCode,
+        goodsReceiptTypeName: r.GoodsReceiptTypeName,
+        movementTypeCode: r.MovementTypeCode,
+        requiresVendor: Boolean(r.RequiresVendor),
+        requiresProductionOrder: Boolean(r.RequiresProductionOrder),
+        requiresApproval: Boolean(r.RequiresApproval),
+        isActive: Boolean(r.IsActive),
+      }))
+    });
+  })
+);
+
+router.post(
+  '/types',
+  writeRoles,
+  asyncHandler(async (req, res) => {
+    const code = String(req.body.goodsReceiptTypeCode || '').trim().toUpperCase();
+    const name = String(req.body.goodsReceiptTypeName || '').trim();
+    const movementTypeCode = String(req.body.movementTypeCode || 'goods_receipt').trim();
+    const requiresVendor = req.body.requiresVendor ? 1 : 0;
+    const requiresProductionOrder = req.body.requiresProductionOrder ? 1 : 0;
+    const requiresApproval = req.body.requiresApproval ? 1 : 0;
+    const isActive = req.body.isActive !== false ? 1 : 0;
+
+    if (!code) throw badRequest('goodsReceiptTypeCode is required');
+    if (!name) throw badRequest('goodsReceiptTypeName is required');
+
+    const result = await mssqlQuery('DEFAULT', `
+      INSERT INTO dbo.GoodsReceiptTypes (GoodsReceiptTypeCode, GoodsReceiptTypeName, MovementTypeCode, RequiresVendor, RequiresProductionOrder, RequiresApproval, IsActive)
+      OUTPUT INSERTED.GoodsReceiptTypeId
+      VALUES (@code, @name, @movementTypeCode, @requiresVendor, @requiresProductionOrder, @requiresApproval, @isActive)
+    `, {
+      inputs: {
+        code: { type: sql.NVarChar(40), value: code },
+        name: { type: sql.NVarChar(100), value: name },
+        movementTypeCode: { type: sql.NVarChar(40), value: movementTypeCode },
+        requiresVendor: { type: sql.Bit, value: requiresVendor },
+        requiresProductionOrder: { type: sql.Bit, value: requiresProductionOrder },
+        requiresApproval: { type: sql.Bit, value: requiresApproval },
+        isActive: { type: sql.Bit, value: isActive },
+      }
+    });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        goodsReceiptTypeId: result[0].GoodsReceiptTypeId,
+        goodsReceiptTypeCode: code,
+        goodsReceiptTypeName: name,
+        movementTypeCode,
+        requiresVendor,
+        requiresProductionOrder,
+        requiresApproval,
+        isActive,
+      }
+    });
+  })
+);
+
+router.put(
+  '/types/:id',
+  writeRoles,
+  asyncHandler(async (req, res) => {
+    const typeId = parseId(req.params.id, 'goodsReceiptTypeId');
+    const name = String(req.body.goodsReceiptTypeName || '').trim();
+    const requiresVendor = req.body.requiresVendor ? 1 : 0;
+    const requiresProductionOrder = req.body.requiresProductionOrder ? 1 : 0;
+    const requiresApproval = req.body.requiresApproval ? 1 : 0;
+    const isActive = req.body.isActive !== false ? 1 : 0;
+
+    if (!name) throw badRequest('goodsReceiptTypeName is required');
+
+    await mssqlQuery('DEFAULT', `
+      UPDATE dbo.GoodsReceiptTypes
+      SET
+        GoodsReceiptTypeName = @name,
+        RequiresVendor = @requiresVendor,
+        RequiresProductionOrder = @requiresProductionOrder,
+        RequiresApproval = @requiresApproval,
+        IsActive = @isActive
+      WHERE GoodsReceiptTypeId = @typeId
+    `, {
+      inputs: {
+        typeId: { type: sql.Int, value: typeId },
+        name: { type: sql.NVarChar(100), value: name },
+        requiresVendor: { type: sql.Bit, value: requiresVendor },
+        requiresProductionOrder: { type: sql.Bit, value: requiresProductionOrder },
+        requiresApproval: { type: sql.Bit, value: requiresApproval },
+        isActive: { type: sql.Bit, value: isActive },
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Goods receipt type updated successfully'
+    });
+  })
+);
 
 router.get(
   '/',
@@ -506,6 +668,8 @@ router.post(
         `);
         goodsReceiptId = headerRes.recordset[0].GoodsReceiptId;
 
+        await resolveLineLots(tx, lineSnapshots, userId);
+
         for (const line of lineSnapshots) {
           const lineReq = new sql.Request(tx);
           lineReq.input('goodsReceiptId', sql.Int, goodsReceiptId);
@@ -596,118 +760,97 @@ router.put(
     const lineSnapshots = replaceLines ? buildLineSnapshots(req.body.lines) : null;
     const totals = lineSnapshots ? calculateHeaderTotals(lineSnapshots) : null;
 
-    await mssqlQuery('DEFAULT', `
-      UPDATE dbo.GoodsReceipts
-      SET
-        GoodsReceiptTypeId = COALESCE(@goodsReceiptTypeId, GoodsReceiptTypeId),
-        WarehouseId = COALESCE(@warehouseId, WarehouseId),
-        VendorId = @vendorId,
-        CustomerId = @customerId,
-        PurchaseOrderId = @purchaseOrderId,
-        ProductionOrderId = @productionOrderId,
-        BranchId = @branchId,
-        ReceiptDate = COALESCE(@receiptDate, ReceiptDate),
-        Remark = @remark,
-        ReceivedSheetTotal = COALESCE(@receivedSheetTotal, ReceivedSheetTotal),
-        PalletCountTotal = COALESCE(@palletCountTotal, PalletCountTotal),
-        M3Total = COALESCE(@m3Total, M3Total),
-        UpdatedAt = SYSUTCDATETIME()
-      WHERE GoodsReceiptId = @goodsReceiptId
-    `, {
-      inputs: {
-        goodsReceiptId: { type: sql.Int, value: goodsReceiptId },
-        goodsReceiptTypeId: { type: sql.Int, value: goodsReceiptTypeId },
-        warehouseId: { type: sql.Int, value: warehouseId },
-        vendorId: { type: sql.Int, value: vendorId },
-        customerId: { type: sql.Int, value: customerId },
-        purchaseOrderId: { type: sql.Int, value: purchaseOrderId },
-        productionOrderId: { type: sql.Int, value: productionOrderId },
-        branchId: { type: sql.Int, value: branchId },
-        receiptDate: { type: sql.Date, value: receiptDate },
-        remark: { type: sql.NVarChar(1000), value: remark },
-        receivedSheetTotal: { type: sql.Decimal(18, 4), value: totals?.receivedSheetTotal ?? null },
-        palletCountTotal: { type: sql.Decimal(18, 4), value: totals?.palletCountTotal ?? null },
-        m3Total: { type: sql.Decimal(18, 6), value: totals?.m3Total ?? null },
-      },
-    });
+    await mssqlTransaction('DEFAULT', async (tx) => {
+      const updateReq = new sql.Request(tx);
+      updateReq.input('goodsReceiptId', sql.Int, goodsReceiptId);
+      updateReq.input('goodsReceiptTypeId', sql.Int, goodsReceiptTypeId);
+      updateReq.input('warehouseId', sql.Int, warehouseId);
+      updateReq.input('vendorId', sql.Int, vendorId);
+      updateReq.input('customerId', sql.Int, customerId);
+      updateReq.input('purchaseOrderId', sql.Int, purchaseOrderId);
+      updateReq.input('productionOrderId', sql.Int, productionOrderId);
+      updateReq.input('branchId', sql.Int, branchId);
+      updateReq.input('receiptDate', sql.Date, receiptDate);
+      updateReq.input('remark', sql.NVarChar(1000), remark);
+      updateReq.input('receivedSheetTotal', sql.Decimal(18, 4), totals?.receivedSheetTotal ?? null);
+      updateReq.input('palletCountTotal', sql.Decimal(18, 4), totals?.palletCountTotal ?? null);
+      updateReq.input('m3Total', sql.Decimal(18, 6), totals?.m3Total ?? null);
 
-    if (replaceLines) {
-      await mssqlQuery('DEFAULT', `
-        DELETE FROM dbo.GoodsReceiptLines
+      await updateReq.query(`
+        UPDATE dbo.GoodsReceipts
+        SET
+          GoodsReceiptTypeId = COALESCE(@goodsReceiptTypeId, GoodsReceiptTypeId),
+          WarehouseId = COALESCE(@warehouseId, WarehouseId),
+          VendorId = @vendorId,
+          CustomerId = @customerId,
+          PurchaseOrderId = @purchaseOrderId,
+          ProductionOrderId = @productionOrderId,
+          BranchId = @branchId,
+          ReceiptDate = COALESCE(@receiptDate, ReceiptDate),
+          Remark = @remark,
+          ReceivedSheetTotal = COALESCE(@receivedSheetTotal, ReceivedSheetTotal),
+          PalletCountTotal = COALESCE(@palletCountTotal, PalletCountTotal),
+          M3Total = COALESCE(@m3Total, M3Total),
+          UpdatedAt = SYSUTCDATETIME()
         WHERE GoodsReceiptId = @goodsReceiptId
-      `, { inputs: { goodsReceiptId: { type: sql.Int, value: goodsReceiptId } } });
+      `);
 
-      for (const line of lineSnapshots) {
-        await mssqlQuery('DEFAULT', `
-          INSERT INTO dbo.GoodsReceiptLines (
-            GoodsReceiptId,
-            LineNum,
-            ItemId,
-            ItemSpecId,
-            LotId,
-            LotNo,
-            WarehouseId,
-            LocationId,
-            UnitId,
-            ReceivedQuantity,
-            ReceivedSheetQty,
-            PalletCount,
-            M3Quantity,
-            ProductTypeId,
-            ThicknessId,
-            WidthId,
-            LengthId,
-            UnitCostSnapshot,
-            Remark
-          )
-          VALUES (
-            @goodsReceiptId,
-            @lineNum,
-            @itemId,
-            @itemSpecId,
-            @lotId,
-            @lotNo,
-            @warehouseId,
-            @locationId,
-            @unitId,
-            @receivedQuantity,
-            @receivedSheetQty,
-            @palletCount,
-            @m3Quantity,
-            @productTypeId,
-            @thicknessId,
-            @widthId,
-            @lengthId,
-            @unitCostSnapshot,
-            @remark
-          )
-        `, {
-          inputs: {
-            goodsReceiptId: { type: sql.Int, value: goodsReceiptId },
-            lineNum: { type: sql.Int, value: line.lineNum },
-            itemId: { type: sql.Int, value: line.itemId },
-            itemSpecId: { type: sql.Int, value: line.itemSpecId },
-            lotId: { type: sql.BigInt, value: line.lotId },
-            lotNo: { type: sql.NVarChar(80), value: line.lotNo },
-            warehouseId: { type: sql.Int, value: line.warehouseId },
-            locationId: { type: sql.Int, value: line.locationId },
-            unitId: { type: sql.Int, value: line.unitId },
-            receivedQuantity: { type: sql.Decimal(18, 4), value: line.receivedQuantity },
-            receivedSheetQty: { type: sql.Decimal(18, 4), value: line.receivedSheetQty },
-            palletCount: { type: sql.Decimal(18, 4), value: line.palletCount },
-            m3Quantity: { type: sql.Decimal(18, 6), value: line.m3Quantity },
-            productTypeId: { type: sql.Int, value: line.productTypeId },
-            thicknessId: { type: sql.Int, value: line.thicknessId },
-            widthId: { type: sql.Int, value: line.widthId },
-            lengthId: { type: sql.Int, value: line.lengthId },
-            unitCostSnapshot: { type: sql.Decimal(18, 4), value: line.unitCostSnapshot },
-            remark: { type: sql.NVarChar(1000), value: line.remark },
-          },
-        });
+      if (replaceLines) {
+        const delReq = new sql.Request(tx);
+        delReq.input('goodsReceiptId', sql.Int, goodsReceiptId);
+        await delReq.query(`
+          DELETE FROM dbo.GoodsReceiptLines
+          WHERE GoodsReceiptId = @goodsReceiptId
+        `);
+
+        await resolveLineLots(tx, lineSnapshots, userId);
+
+        for (const line of lineSnapshots) {
+          const lineReq = new sql.Request(tx);
+          lineReq.input('goodsReceiptId', sql.Int, goodsReceiptId);
+          lineReq.input('lineNum', sql.Int, line.lineNum);
+          lineReq.input('itemId', sql.Int, line.itemId);
+          lineReq.input('itemSpecId', sql.Int, line.itemSpecId);
+          lineReq.input('lotId', sql.BigInt, line.lotId);
+          lineReq.input('lotNo', sql.NVarChar(80), line.lotNo);
+          lineReq.input('warehouseId', sql.Int, line.warehouseId);
+          lineReq.input('locationId', sql.Int, line.locationId);
+          lineReq.input('unitId', sql.Int, line.unitId);
+          lineReq.input('receivedQuantity', sql.Decimal(18, 4), line.receivedQuantity);
+          lineReq.input('receivedSheetQty', sql.Decimal(18, 4), line.receivedSheetQty);
+          lineReq.input('palletCount', sql.Decimal(18, 4), line.palletCount);
+          lineReq.input('m3Quantity', sql.Decimal(18, 6), line.m3Quantity);
+          lineReq.input('productTypeId', sql.Int, line.productTypeId);
+          lineReq.input('thicknessId', sql.Int, line.thicknessId);
+          lineReq.input('widthId', sql.Int, line.widthId);
+          lineReq.input('lengthId', sql.Int, line.lengthId);
+          lineReq.input('unitCostSnapshot', sql.Decimal(18, 4), line.unitCostSnapshot);
+          lineReq.input('remark', sql.NVarChar(1000), line.remark);
+
+          await lineReq.query(`
+            INSERT INTO dbo.GoodsReceiptLines (
+              GoodsReceiptId, LineNum, ItemId, ItemSpecId, LotId, LotNo, WarehouseId, LocationId, UnitId,
+              ReceivedQuantity, ReceivedSheetQty, PalletCount, M3Quantity, ProductTypeId, ThicknessId,
+              WidthId, LengthId, UnitCostSnapshot, Remark
+            )
+            VALUES (
+              @goodsReceiptId, @lineNum, @itemId, @itemSpecId, @lotId, @lotNo, @warehouseId, @locationId, @unitId,
+              @receivedQuantity, @receivedSheetQty, @palletCount, @m3Quantity, @productTypeId, @thicknessId,
+              @widthId, @lengthId, @unitCostSnapshot, @remark
+            )
+          `);
+        }
       }
-    }
 
-    await writeStatusHistory('GR', goodsReceiptId, existing.status, existing.status, userId, 'Updated');
+      const histReq = new sql.Request(tx);
+      histReq.input('grId', sql.Int, goodsReceiptId);
+      histReq.input('status', sql.NVarChar(30), existing.status);
+      histReq.input('userId', sql.Int, userId);
+      await histReq.query(`
+        INSERT INTO dbo.DocumentStatusHistory (DocumentType, DocumentId, FromStatus, ToStatus, ChangedBy, Notes)
+        VALUES ('GR', @grId, @status, @status, @userId, 'Updated')
+      `);
+    });
 
     const order = await getGoodsReceipt(goodsReceiptId);
     const lines = await getGoodsReceiptLines(goodsReceiptId);
@@ -727,10 +870,12 @@ router.get(
         DocumentId,
         FromStatus,
         ToStatus,
-        ChangedBy,
+        dsh.ChangedBy,
+        u.DisplayName as ChangedByName,
         ChangedAt,
         Notes
-      FROM dbo.DocumentStatusHistory
+      FROM dbo.DocumentStatusHistory dsh
+      LEFT JOIN dbo.Users u ON u.UserId = dsh.ChangedBy
       WHERE DocumentType = 'GR' AND DocumentId = @goodsReceiptId
       ORDER BY ChangedAt DESC, DocumentStatusHistoryId DESC
     `, { inputs: { goodsReceiptId: { type: sql.Int, value: goodsReceiptId } } });
@@ -743,6 +888,7 @@ router.get(
         fromStatus: r.FromStatus,
         toStatus: r.ToStatus,
         changedBy: r.ChangedBy,
+        changedByName: r.ChangedByName,
         changedAt: r.ChangedAt,
         notes: r.Notes,
       })),

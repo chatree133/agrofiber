@@ -89,6 +89,10 @@ router.get(
       conditions.push('cp.PaymentMethod = @paymentMethod');
       inputs.paymentMethod = { type: sql.NVarChar(40), value: req.query.paymentMethod };
     }
+    if (req.query.salesInvoiceId) {
+      conditions.push('EXISTS (SELECT 1 FROM dbo.CustomerPaymentAllocations WHERE CustomerPaymentId = cp.CustomerPaymentId AND SalesInvoiceId = @salesInvoiceId)');
+      inputs.salesInvoiceId = { type: sql.Int, value: parseId(req.query.salesInvoiceId, 'salesInvoiceId') };
+    }
 
     const whereSql = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
