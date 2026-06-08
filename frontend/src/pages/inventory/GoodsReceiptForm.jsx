@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { ArrowLeftOutlined, PlusOutlined, DeleteOutlined } from "@ant-design/icons";
-import { Button, Card, Col, DatePicker, Form, Input, InputNumber, Row, Select, Space, Table, Typography, message } from "antd";
+import { Button, Card, Col, DatePicker, Form, Input, InputNumber, Row, Select, Space, Table, Typography, message, Checkbox } from "antd";
 import { useNavigate, useParams } from "react-router-dom";
 import dayjs from "dayjs";
 import { useGoodsReceipt } from "../../context/GoodsReceiptContext.jsx";
@@ -50,7 +50,7 @@ export default function GoodsReceiptForm() {
     const [loading, setLoading] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [lineItems, setLineItems] = useState([
-        { key: 1, itemId: null, itemSpecId: null, sku: "", name: "", unitId: null, receivedQuantity: 1, unitCostSnapshot: 0, locationId: null, lotNo: "", remark: "" }
+        { key: 1, itemId: null, itemSpecId: null, sku: "", name: "", unitId: null, receivedQuantity: 100, unitCostSnapshot: 0, locationId: null, lotNo: "", generatePallet: true, remark: "" }
     ]);
 
     const fetchData = async () => {
@@ -133,11 +133,12 @@ export default function GoodsReceiptForm() {
                         unitCostSnapshot: l.unitCostSnapshot || 0,
                         locationId: l.locationId,
                         lotNo: l.lotNo || "",
+                        generatePallet: l.palletNo ? false : true,
                         remark: l.remark || "",
                     };
                 });
                 setSkuItemsMap(initialSkuMap);
-                setLineItems(mappedLines.length ? mappedLines : [{ key: 1, itemId: null, itemSpecId: null, sku: "", name: "", unitId: null, receivedQuantity: 1, unitCostSnapshot: 0, locationId: null, lotNo: "", remark: "" }]);
+                setLineItems(mappedLines.length ? mappedLines : [{ key: 1, itemId: null, itemSpecId: null, sku: "", name: "", unitId: null, receivedQuantity: 100, unitCostSnapshot: 0, locationId: null, lotNo: "", generatePallet: true, remark: "" }]);
             } else {
                 form.setFieldsValue({
                     receiptDate: dayjs(),
@@ -239,7 +240,7 @@ export default function GoodsReceiptForm() {
         const newKey = lineItems.length ? Math.max(...lineItems.map(l => l.key)) + 1 : 1;
         setLineItems([
             ...lineItems,
-            { key: newKey, itemId: null, itemSpecId: null, sku: "", name: "", unitId: null, receivedQuantity: 1, unitCostSnapshot: 0, locationId: null, lotNo: "", remark: "" }
+            { key: newKey, itemId: null, itemSpecId: null, sku: "", name: "", unitId: null, receivedQuantity: 100, unitCostSnapshot: 0, locationId: null, lotNo: "", generatePallet: true, remark: "" }
         ]);
     };
 
@@ -257,9 +258,9 @@ export default function GoodsReceiptForm() {
             const values = await form.validateFields();
 
             // Validate lines
-            const invalidLine = lineItems.find(l => !l.itemId || !l.unitId || !l.receivedQuantity);
+            const invalidLine = lineItems.find(l => !l.itemId || !l.unitId || !l.receivedQuantity || !l.lotNo || !l.lotNo.trim());
             if (invalidLine) {
-                message.error("กรุณากรอกข้อมูลสินค้า หน่วย และจำนวนให้ครบถ้วนในทุกบรรทัด");
+                message.error("กรุณากรอกข้อมูลสินค้า หน่วย จำนวน และล๊อตสินค้าให้ครบถ้วนในทุกบรรทัด");
                 return;
             }
 
@@ -287,6 +288,7 @@ export default function GoodsReceiptForm() {
                     warehouseId: whId, // pass header warehouse to each line as required
                     locationId: l.locationId,
                     lotNo: l.lotNo || null,
+                    generatePallet: l.generatePallet !== false,
                     remark: l.remark || null,
                 }))
             };
@@ -323,6 +325,7 @@ export default function GoodsReceiptForm() {
             width: "20%",
             render: (record, _, idx) => (
                 <Select
+                    size="small"
                     showSearch
                     allowClear
                     filterOption={false}
@@ -368,6 +371,7 @@ export default function GoodsReceiptForm() {
             width: "10%",
             render: (record, _, idx) => (
                 <Select
+                    size="small"
                     placeholder="หน่วย"
                     style={{ width: "100%" }}
                     value={record.unitId || undefined}
@@ -384,9 +388,10 @@ export default function GoodsReceiptForm() {
         {
             title: "จำนวนรับ",
             key: "receivedQuantity",
-            width: "10%",
+            width: "8%",
             render: (record, _, idx) => (
                 <InputNumber
+                    size="small"
                     min={0.0001}
                     style={{ width: "100%" }}
                     value={record.receivedQuantity}
@@ -395,11 +400,12 @@ export default function GoodsReceiptForm() {
             ),
         },
         {
-            title: "ต้นทุน/หน่วย (บาท)",
+            title: "ต้นทุน ฿/หน่วย",
             key: "unitCostSnapshot",
-            width: "14%",
+            width: "10%",
             render: (record, _, idx) => (
                 <InputNumber
+                    size="small"
                     min={0}
                     style={{ width: "100%" }}
                     value={record.unitCostSnapshot}
@@ -413,6 +419,7 @@ export default function GoodsReceiptForm() {
             width: "12%",
             render: (record, _, idx) => (
                 <Select
+                    size="small"
                     placeholder="ไม่ระบุ"
                     style={{ width: "100%" }}
                     value={record.locationId}
@@ -428,11 +435,17 @@ export default function GoodsReceiptForm() {
             ),
         },
         {
-            title: "Lot No.",
+            title: (
+                <span>
+                    <span style={{ color: '#ff4d4f', marginRight: '4px' }}>*</span>
+                    Lot No.
+                </span>
+            ),
             key: "lotNo",
-            width: "14%",
+            width: "8%",
             render: (record, _, idx) => (
                 <Input
+                    size="small"
                     placeholder="ระบุล็อตสินค้า"
                     value={record.lotNo}
                     onChange={(e) => handleLineFieldChange(e.target.value, "lotNo", idx)}
@@ -440,9 +453,21 @@ export default function GoodsReceiptForm() {
             ),
         },
         {
+            title: "เจนพาเลท",
+            key: "generatePallet",
+            width: "8%",
+            align: "center",
+            render: (record, _, idx) => (
+                <Checkbox
+                    checked={record.generatePallet !== false}
+                    onChange={(e) => handleLineFieldChange(e.target.checked, "generatePallet", idx)}
+                />
+            ),
+        },
+        {
             title: "ลบ",
             key: "delete",
-            width: "50px",
+            width: "40px",
             render: (_, __, idx) => (
                 <Button type="link" danger icon={<DeleteOutlined />} onClick={() => deleteLine(idx)} />
             ),
@@ -602,6 +627,7 @@ export default function GoodsReceiptForm() {
                 </div>
 
                 <Table
+                    size="small"
                     columns={columns}
                     dataSource={lineItems}
                     pagination={false}

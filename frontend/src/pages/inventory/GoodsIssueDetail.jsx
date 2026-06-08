@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { ArrowLeftOutlined, EditOutlined, CheckCircleOutlined, SendOutlined, PlayCircleOutlined } from "@ant-design/icons";
+import { ArrowLeftOutlined, EditOutlined, CheckCircleOutlined, SendOutlined, PlayCircleOutlined, PrinterOutlined } from "@ant-design/icons";
 import { Button, Card, Col, Descriptions, Divider, Row, Space, Table, Tag, Typography, message } from "antd";
 import { useNavigate, useParams } from "react-router-dom";
 import { useGoodsIssue } from "../../context/GoodsIssueContext.jsx";
@@ -273,6 +273,13 @@ export default function GoodsIssueDetail() {
                             <CheckCircleOutlined /> เอกสารถูกตัดสต็อกเรียบร้อยแล้ว
                         </Text>
                     )}
+
+                    <Button
+                        icon={<PrinterOutlined />}
+                        onClick={() => window.open(`/document/print?form=GI&docId=${id}`, '_blank')}
+                    >
+                        พิมพ์รายการ (Print)
+                    </Button>
                 </Space>
             </Card>
 

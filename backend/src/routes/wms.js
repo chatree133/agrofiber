@@ -17,6 +17,20 @@ function getUserId(req) {
   return userId;
 }
 
+// Get last putaway location of an item
+router.get('/items/last-location', readRoles, asyncHandler(async (req, res) => {
+  const itemId = Number(req.query.itemId);
+  const itemSpecId = req.query.itemSpecId ? Number(req.query.itemSpecId) : null;
+  const warehouseId = Number(req.query.warehouseId);
+
+  if (!itemId || !warehouseId) {
+    return res.status(400).json({ message: 'itemId and warehouseId are required' });
+  }
+
+  const lastLocation = await wmsTaskService.getLastLocation({ itemId, itemSpecId, warehouseId });
+  res.json({ data: lastLocation });
+}));
+
 // Get all tasks (with filters)
 router.get('/tasks', readRoles, asyncHandler(async (req, res) => {
   const filters = {

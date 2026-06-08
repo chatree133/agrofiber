@@ -112,6 +112,8 @@ router.get(
         l.ItemId,
         i.ItemCode,
         i.ItemName,
+        ispec.SalesSKU,
+        ispec.SpecName,
         l.LotNo,
         l.ProductionDate,
         l.ExpiryDate,
@@ -126,6 +128,19 @@ router.get(
       FROM FilteredLots fl
       JOIN dbo.Lots l ON l.LotId = fl.LotId
       JOIN dbo.Items i ON i.ItemId = l.ItemId
+      LEFT JOIN dbo.ItemSpecs ispec ON ispec.ItemSpecId = COALESCE(
+        (SELECT TOP 1 ItemSpecId FROM dbo.GoodsReceiptLines WHERE LotId = l.LotId),
+        (SELECT TOP 1 ItemSpecId FROM dbo.InventoryUnits WHERE LotId = l.LotId),
+        (SELECT TOP 1 ItemSpecId FROM dbo.StockOnHand WHERE LotId = l.LotId),
+        (SELECT TOP 1 ItemSpecId FROM dbo.InventoryReservations WHERE LotId = l.LotId),
+        (SELECT TOP 1 ItemSpecId FROM dbo.GoodsIssueLines WHERE LotId = l.LotId),
+        (SELECT TOP 1 ItemSpecId FROM dbo.WmsTaskLines WHERE LotId = l.LotId),
+        CASE 
+          WHEN l.SourceDocumentType IN ('GoodsReceipt', 'GR') THEN (SELECT TOP 1 ItemSpecId FROM dbo.GoodsReceiptLines WHERE GoodsReceiptId = l.SourceDocumentId AND ItemId = l.ItemId)
+          WHEN l.SourceDocumentType IN ('GoodsIssue', 'GI')   THEN (SELECT TOP 1 ItemSpecId FROM dbo.GoodsIssueLines   WHERE GoodsIssueId   = l.SourceDocumentId AND ItemId = l.ItemId)
+          ELSE NULL
+        END
+      )
       ORDER BY l.CreatedAt DESC, l.LotId DESC
       OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
     `, {
@@ -142,6 +157,8 @@ router.get(
         itemId: r.ItemId,
         itemCode: r.ItemCode,
         itemName: r.ItemName,
+        salesSku: r.SalesSKU,
+        specName: r.SpecName,
         lotNo: r.LotNo,
         productionDate: r.ProductionDate,
         expiryDate: r.ExpiryDate,

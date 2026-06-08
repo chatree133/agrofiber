@@ -11,9 +11,9 @@ function calculateMarkup(unitPrice, unitCost) {
 export { calculateMargin, calculateMarkup };
 
 export function badRequest(message) {
-  const error = new Error(message);
-  error.status = 400;
-  return error;
+    const error = new Error(message);
+    error.status = 400;
+    return error;
 }
 
 export function calculateProposedPrice({ pricingMethodCode, standardPrice, standardCost, targetMarginPercent, targetMarkupPercent }) {

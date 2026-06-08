@@ -650,6 +650,11 @@ export default function QuotationCreate() {
       if (line.key === key) {
         const updatedLine = { ...line };
 
+        if (field === 'remark') {
+          updatedLine.remark = val;
+          return updatedLine;
+        }
+
         let enteredPrice = field === 'unitPrice' ? Number(val || 0) : line.unitPrice * (taxType === 'VAT7IN' ? 1.07 : 1);
         let enteredDiscAmt = field === 'discountAmount' ? Number(val || 0) : line.discountAmount * (taxType === 'VAT7IN' ? 1.07 : 1);
         let enteredDiscPct = field === 'discountPercent' ? Number(val || 0) : line.discountPercent;

@@ -2,7 +2,7 @@ import { sql } from '../../lib/mssql.js';
 
 export const stockService = {
   async insertStockMovement(tx, {
-    movementType, referenceType, referenceId, itemId,
+    movementType, referenceType, referenceId, itemId, itemSpecId = null,
     fromWarehouseId = null, fromLocationId = null,
     toWarehouseId = null, toLocationId = null,
     lotId = null, lotNo = null, quantity,
@@ -13,6 +13,7 @@ export const stockService = {
     req.input('refType', sql.NVarChar(40), referenceType);
     req.input('refId', sql.Int, referenceId);
     req.input('itemId', sql.Int, itemId);
+    req.input('itemSpecId', sql.Int, itemSpecId);
     req.input('fromWhId', sql.Int, fromWarehouseId);
     req.input('fromLocId', sql.Int, fromLocationId);
     req.input('toWhId', sql.Int, toWarehouseId);
@@ -27,13 +28,13 @@ export const stockService = {
 
     const res = await req.query(`
       INSERT INTO dbo.StockMovements (
-        MovementType, ReferenceType, ReferenceId, ItemId, 
+        MovementType, ReferenceType, ReferenceId, ItemId, ItemSpecId,
         FromWarehouseId, FromLocationId, ToWarehouseId, ToLocationId, 
         LotId, LotNo, Quantity, UnitId, UnitCost, TotalCost, CreatedBy
       )
       OUTPUT INSERTED.StockMovementId
       VALUES (
-        @movType, @refType, @refId, @itemId, 
+        @movType, @refType, @refId, @itemId, @itemSpecId,
         @fromWhId, @fromLocId, @toWhId, @toLocId, 
         @lotId, @lotNo, @qty, @unitId, @unitCost, @totalCost, @createdBy
       )

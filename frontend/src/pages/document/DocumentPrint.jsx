@@ -13,7 +13,8 @@ import RcptDocumentTemplate from './templates/RcptDocumentTemplate';
 import CombinedBillingTemplate from './templates/CombinedBillingTemplate';
 import WavePrintTemplate from './templates/WavePrintTemplate';
 import LabelPrintTemplate from './templates/LabelPrintTemplate';
-import ApiClient from '../../context/Api.jsx';
+import GiDocumentTemplate from './templates/GiDocumentTemplate';
+import { useDocument } from '../../context/DocumentContext';
 
 export default function DocumentPrint() {
   const [searchParams] = useSearchParams();
@@ -23,6 +24,16 @@ export default function DocumentPrint() {
 
   const { getQuotationDetail } = useQuotation();
   const { getSalesOrderDetail } = useSalesOrder();
+  const {
+    getDeliveryOrderDetail,
+    getSalesInvoiceDetail,
+    getCustomerPaymentDetail,
+    getWmsWaveDetail,
+    getGoodsReceiptDetail,
+    getGoodsIssueDetail,
+    getSalesInvoices,
+    getCustomerPayments
+  } = useDocument();
 
   const [loading, setLoading] = useState(true);
   const [docData, setDocData] = useState(null);
@@ -72,41 +83,37 @@ export default function DocumentPrint() {
         } else if (formType === 'SO') {
           res = await getSalesOrderDetail(docId);
         } else if (formType === 'DO') {
-          const doRes = await ApiClient.get(`/api/delivery-orders/${docId}`);
-          res = doRes.data;
+          res = await getDeliveryOrderDetail(docId);
+        } else if (formType === 'GI') {
+          res = await getGoodsIssueDetail(docId);
         } else if (formType === 'INV') {
-          const invRes = await ApiClient.get(`/api/sales-invoices/${docId}`);
-          res = invRes.data;
+          res = await getSalesInvoiceDetail(docId);
         } else if (formType === 'RCPT') {
-          const rcptRes = await ApiClient.get(`/api/customer-payments/${docId}`);
-          res = rcptRes.data;
+          res = await getCustomerPaymentDetail(docId);
         } else if (formType === 'WAVE') {
-          const waveRes = await ApiClient.get(`/api/wms/waves/${docId}`);
-          res = waveRes.data;
+          res = await getWmsWaveDetail(docId);
         } else if (formType === 'LABEL') {
-          const grRes = await ApiClient.get(`/api/goods-receipts/${docId}`);
-          res = grRes.data;
+          res = await getGoodsReceiptDetail(docId);
         } else if (formType === 'COMBINED') {
           // docId is the deliveryOrderId
           // Fetch DO
-          const doRes = await ApiClient.get(`/api/delivery-orders/${docId}`);
-          const doData = doRes.data;
+          const doData = await getDeliveryOrderDetail(docId);
 
           // Fetch Invoice
           let invData = null;
-          const invListRes = await ApiClient.get('/api/sales-invoices', { deliveryOrderId: docId });
-          if (invListRes.data?.length > 0) {
-            const invDetailRes = await ApiClient.get(`/api/sales-invoices/${invListRes.data[0].id}`);
-            invData = invDetailRes.data;
+          const invList = await getSalesInvoices({ deliveryOrderId: docId });
+          const invArray = Array.isArray(invList) ? invList : (invList?.data || []);
+          if (invArray.length > 0) {
+            invData = await getSalesInvoiceDetail(invArray[0].id);
           }
 
           // Fetch Receipt
           let rcptData = null;
           if (invData) {
-            const pmtListRes = await ApiClient.get('/api/customer-payments', { salesInvoiceId: invData.SalesInvoiceId || invData.id });
-            if (pmtListRes.data?.length > 0) {
-              const pmtDetailRes = await ApiClient.get(`/api/customer-payments/${pmtListRes.data[0].id}`);
-              rcptData = pmtDetailRes.data;
+            const pmtList = await getCustomerPayments({ salesInvoiceId: invData.SalesInvoiceId || invData.id });
+            const pmtArray = Array.isArray(pmtList) ? pmtList : (pmtList?.data || []);
+            if (pmtArray.length > 0) {
+              rcptData = await getCustomerPaymentDetail(pmtArray[0].id);
             }
           }
 
@@ -169,6 +176,8 @@ export default function DocumentPrint() {
         return <WavePrintTemplate docData={docData} />;
       case 'LABEL':
         return <LabelPrintTemplate docData={docData} lineId={lineId} />;
+      case 'GI':
+        return <GiDocumentTemplate docData={docData} />;
       case 'COMBINED':
         return <CombinedBillingTemplate docData={docData} />;
       default:

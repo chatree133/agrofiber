@@ -2,10 +2,11 @@ import { sql } from '../../lib/mssql.js';
 
 export const costingService = {
   async addCostLayer(tx, {
-    itemId, lotId = null, warehouseId, movementId, quantity, unitCost
+    itemId, itemSpecId = null, lotId = null, warehouseId, movementId, quantity, unitCost
   }) {
     const req = new sql.Request(tx);
     req.input('itemId', sql.Int, itemId);
+    req.input('itemSpecId', sql.Int, itemSpecId);
     req.input('lotId', sql.BigInt, lotId);
     req.input('whId', sql.Int, warehouseId);
     req.input('movId', sql.BigInt, movementId);
@@ -14,20 +15,21 @@ export const costingService = {
 
     await req.query(`
       INSERT INTO dbo.InventoryCostLayers (
-        ItemId, LotId, WarehouseId, SourceMovementId, QuantityOriginal, QuantityRemaining, UnitCost
+        ItemId, ItemSpecId, LotId, WarehouseId, SourceMovementId, QuantityOriginal, QuantityRemaining, UnitCost
       )
       VALUES (
-        @itemId, @lotId, @whId, @movId, @qty, @qty, @cost
+        @itemId, @itemSpecId, @lotId, @whId, @movId, @qty, @qty, @cost
       )
     `);
   },
 
-  async consumeFifoLayers(tx, { itemId, warehouseId, lotId = null, quantityToConsume }) {
+  async consumeFifoLayers(tx, { itemId, itemSpecId = null, warehouseId, lotId = null, quantityToConsume }) {
     let remainingToIssue = quantityToConsume;
     let totalValuationCost = 0;
 
     const layersReq = new sql.Request(tx);
     layersReq.input('itemId', sql.Int, itemId);
+    layersReq.input('itemSpecId', sql.Int, itemSpecId);
     layersReq.input('whId', sql.Int, warehouseId);
     layersReq.input('lotId', sql.BigInt, lotId);
     
@@ -39,7 +41,10 @@ export const costingService = {
     const layersRes = await layersReq.query(`
       SELECT InventoryCostLayerId, QuantityRemaining, UnitCost
       FROM dbo.InventoryCostLayers
-      WHERE ItemId = @itemId AND ISNULL(WarehouseId, -1) = ISNULL(@whId, -1) AND QuantityRemaining > 0
+      WHERE ItemId = @itemId 
+        AND ISNULL(ItemSpecId, -1) = ISNULL(@itemSpecId, -1)
+        AND ISNULL(WarehouseId, -1) = ISNULL(@whId, -1) 
+        AND QuantityRemaining > 0
       ${lotFilter}
       ORDER BY CreatedAt ASC
     `);
@@ -76,11 +81,12 @@ export const costingService = {
   },
 
   async insertValuationMovement(tx, {
-    stockMovementId, itemId, lotId = null, quantity, unitCost, totalCost, valuationMethod = 'fifo'
+    stockMovementId, itemId, itemSpecId = null, lotId = null, quantity, unitCost, totalCost, valuationMethod = 'fifo'
   }) {
     const valReq = new sql.Request(tx);
     valReq.input('movId', sql.BigInt, stockMovementId);
     valReq.input('itemId', sql.Int, itemId);
+    valReq.input('itemSpecId', sql.Int, itemSpecId);
     valReq.input('lotId', sql.BigInt, lotId);
     valReq.input('qty', sql.Decimal(18, 4), quantity);
     valReq.input('unitCost', sql.Decimal(18, 4), unitCost);
@@ -89,10 +95,10 @@ export const costingService = {
     
     await valReq.query(`
       INSERT INTO dbo.InventoryValuationMovements (
-        StockMovementId, ItemId, LotId, Quantity, UnitCost, TotalCost, ValuationMethod
+        StockMovementId, ItemId, ItemSpecId, LotId, Quantity, UnitCost, TotalCost, ValuationMethod
       )
       VALUES (
-        @movId, @itemId, @lotId, @qty, @unitCost, @totalCost, @method
+        @movId, @itemId, @itemSpecId, @lotId, @qty, @unitCost, @totalCost, @method
       )
     `);
   }

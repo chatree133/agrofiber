@@ -387,7 +387,7 @@ router.post(
           const task = taskRes.recordset[0];
           if (task) {
             const linesRes = await taskReq.query(`
-              SELECT tl.ItemId, tl.ItemSpecId, tl.LotId, tl.FromLocationId AS LocationId, tl.QuantityCompleted AS Quantity, tl.InventoryReservationId, tl.InventoryUnitId, dol.UnitId
+              SELECT tl.ItemId, tl.ItemSpecId, tl.LotId, tl.FromLocationId AS LocationId, tl.QuantityCompleted AS Quantity, tl.InventoryReservationId, tl.InventoryUnitId, dol.UnitId, tl.PalletNo
               FROM dbo.WmsTaskLines tl
               JOIN dbo.DeliveryOrderLines dol ON dol.DeliveryOrderId = @doId AND dol.ItemId = tl.ItemId AND dol.ItemSpecId = tl.ItemSpecId
               WHERE tl.WmsTaskId = ${task.WmsTaskId} AND tl.QuantityCompleted > 0
@@ -425,12 +425,13 @@ router.post(
                 giLineReq.input('locationId', sql.Int, line.LocationId);
                 giLineReq.input('unitId', sql.Int, line.UnitId);
                 giLineReq.input('qty', sql.Decimal(18, 4), line.Quantity);
+                giLineReq.input('palletNo', sql.NVarChar(100), line.PalletNo || null);
 
                 await giLineReq.query(`
                   INSERT INTO dbo.GoodsIssueLines (
-                    GoodsIssueId, LineNum, ItemId, ItemSpecId, LotId, WarehouseId, LocationId, UnitId, RequestedQuantity, IssuedQuantity
+                    GoodsIssueId, LineNum, ItemId, ItemSpecId, LotId, WarehouseId, LocationId, UnitId, RequestedQuantity, IssuedQuantity, PalletNo
                   ) VALUES (
-                    @giId, @lineNum, @itemId, @itemSpecId, @lotId, @warehouseId, @locationId, @unitId, @qty, @qty
+                    @giId, @lineNum, @itemId, @itemSpecId, @lotId, @warehouseId, @locationId, @unitId, @qty, @qty, @palletNo
                   )
                 `);
 

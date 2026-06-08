@@ -141,6 +141,7 @@ function mapGoodsReceiptLine(row) {
     lengthLabel: row.LengthLabel,
     unitCostSnapshot: row.UnitCostSnapshot,
     remark: row.Remark,
+    palletNo: row.PalletNo,
   };
 }
 
@@ -231,7 +232,8 @@ async function getGoodsReceiptLines(goodsReceiptId) {
       ln.LengthM,
       ln.LengthLabel,
       grl.UnitCostSnapshot,
-      grl.Remark
+      grl.Remark,
+      grl.PalletNo
     FROM dbo.GoodsReceiptLines grl
     JOIN dbo.Items i ON i.ItemId = grl.ItemId
     JOIN dbo.Units u ON u.UnitId = grl.UnitId
@@ -326,14 +328,48 @@ async function resolveLineLots(tx, lineSnapshots, userId) {
         const ins = await tx.request()
           .input('itemId', sql.Int, line.itemId)
           .input('lotNo', sql.NVarChar(80), line.lotNo)
-          .input('createdBy', sql.Int, userId)
           .query(`
-            INSERT INTO dbo.Lots (ItemId, LotNo, QualityStatus, CreatedBy)
+            INSERT INTO dbo.Lots (ItemId, LotNo, QualityStatus)
             OUTPUT INSERTED.LotId
-            VALUES (@itemId, @lotNo, 'approved', @createdBy)
+            VALUES (@itemId, @lotNo, 'approved')
           `);
         line.lotId = ins.recordset[0].LotId;
       }
+    }
+  }
+}
+
+async function assignLinePalletNumbers(tx, lineSnapshots) {
+  const yy = String(new Date().getFullYear()).slice(-2); // e.g. '26'
+  const prefix = `PLT${yy}`;
+  
+  const maxRes = await tx.request()
+    .input('prefix', sql.NVarChar(20), prefix + '%')
+    .query(`
+      SELECT MAX(PalletNo) AS MaxPalletNo
+      FROM (
+        SELECT TrackingNo AS PalletNo FROM dbo.InventoryUnits WHERE TrackingNo LIKE @prefix
+        UNION ALL
+        SELECT PalletNo FROM dbo.GoodsReceiptLines WHERE PalletNo LIKE @prefix
+        UNION ALL
+        SELECT PalletNo FROM dbo.WmsTaskLines WHERE PalletNo LIKE @prefix
+      ) AS AllPallets
+    `);
+    
+  let nextSeq = 1;
+  if (maxRes.recordset.length > 0 && maxRes.recordset[0].MaxPalletNo) {
+    const maxPalletNo = maxRes.recordset[0].MaxPalletNo;
+    const numPart = maxPalletNo.substring(prefix.length);
+    const num = parseInt(numPart, 10);
+    if (!isNaN(num)) {
+      nextSeq = num + 1;
+    }
+  }
+  
+  for (const line of lineSnapshots) {
+    if (!line.palletNo && line.generatePallet !== false) {
+      line.palletNo = prefix + String(nextSeq).padStart(5, '0');
+      nextSeq += 1;
     }
   }
 }
@@ -367,6 +403,8 @@ function buildLineSnapshots(rawLines) {
       lengthId: parseOptionalId(raw.lengthId, `lines[${idx}].lengthId`),
       unitCostSnapshot: parseOptionalNumber(raw.unitCostSnapshot, `lines[${idx}].unitCostSnapshot`),
       remark: raw.remark ? String(raw.remark).trim() : null,
+      palletNo: raw.palletNo ? String(raw.palletNo).trim() : null,
+      generatePallet: raw.generatePallet !== false,
     });
   }
 
@@ -669,7 +707,8 @@ router.post(
         goodsReceiptId = headerRes.recordset[0].GoodsReceiptId;
 
         await resolveLineLots(tx, lineSnapshots, userId);
-
+        await assignLinePalletNumbers(tx, lineSnapshots);
+ 
         for (const line of lineSnapshots) {
           const lineReq = new sql.Request(tx);
           lineReq.input('goodsReceiptId', sql.Int, goodsReceiptId);
@@ -691,16 +730,17 @@ router.post(
           lineReq.input('lengthId', sql.Int, line.lengthId);
           lineReq.input('unitCostSnapshot', sql.Decimal(18, 4), line.unitCostSnapshot);
           lineReq.input('remark', sql.NVarChar(1000), line.remark);
-
+          lineReq.input('palletNo', sql.NVarChar(100), line.palletNo);
+ 
           await lineReq.query(`
             INSERT INTO dbo.GoodsReceiptLines (
               GoodsReceiptId, LineNum, ItemId, ItemSpecId, LotId, LotNo, WarehouseId, LocationId, UnitId,
               ReceivedQuantity, ReceivedSheetQty, PalletCount, M3Quantity, ProductTypeId, ThicknessId,
-              WidthId, LengthId, UnitCostSnapshot, Remark
+              WidthId, LengthId, UnitCostSnapshot, Remark, PalletNo
             ) VALUES (
               @goodsReceiptId, @lineNum, @itemId, @itemSpecId, @lotId, @lotNo, @warehouseId, @locationId, @unitId,
               @receivedQuantity, @receivedSheetQty, @palletCount, @m3Quantity, @productTypeId, @thicknessId,
-              @widthId, @lengthId, @unitCostSnapshot, @remark
+              @widthId, @lengthId, @unitCostSnapshot, @remark, @palletNo
             )
           `);
         }
@@ -804,6 +844,7 @@ router.put(
         `);
 
         await resolveLineLots(tx, lineSnapshots, userId);
+        await assignLinePalletNumbers(tx, lineSnapshots);
 
         for (const line of lineSnapshots) {
           const lineReq = new sql.Request(tx);
@@ -826,17 +867,18 @@ router.put(
           lineReq.input('lengthId', sql.Int, line.lengthId);
           lineReq.input('unitCostSnapshot', sql.Decimal(18, 4), line.unitCostSnapshot);
           lineReq.input('remark', sql.NVarChar(1000), line.remark);
+          lineReq.input('palletNo', sql.NVarChar(100), line.palletNo);
 
           await lineReq.query(`
             INSERT INTO dbo.GoodsReceiptLines (
               GoodsReceiptId, LineNum, ItemId, ItemSpecId, LotId, LotNo, WarehouseId, LocationId, UnitId,
               ReceivedQuantity, ReceivedSheetQty, PalletCount, M3Quantity, ProductTypeId, ThicknessId,
-              WidthId, LengthId, UnitCostSnapshot, Remark
+              WidthId, LengthId, UnitCostSnapshot, Remark, PalletNo
             )
             VALUES (
               @goodsReceiptId, @lineNum, @itemId, @itemSpecId, @lotId, @lotNo, @warehouseId, @locationId, @unitId,
               @receivedQuantity, @receivedSheetQty, @palletCount, @m3Quantity, @productTypeId, @thicknessId,
-              @widthId, @lengthId, @unitCostSnapshot, @remark
+              @widthId, @lengthId, @unitCostSnapshot, @remark, @palletNo
             )
           `);
         }

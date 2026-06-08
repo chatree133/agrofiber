@@ -12,6 +12,26 @@ function badRequest(message) {
 /**
  * Orchestrator service to handle inventory posting transactions.
  */
+async function getOrCreateStagingLocation(tx, warehouseId) {
+  const req = new sql.Request(tx);
+  req.input('whId', sql.Int, warehouseId);
+  const res = await req.query(`
+    SELECT LocationId FROM dbo.WarehouseLocations
+    WHERE WarehouseId = @whId AND LocationCode = 'STG-01'
+  `);
+  if (res.recordset.length > 0) {
+    return res.recordset[0].LocationId;
+  }
+  
+  // Seed the STG-01 location for this warehouse
+  const insRes = await req.query(`
+    INSERT INTO dbo.WarehouseLocations (WarehouseId, LocationCode, LocationName, IsPickable, IsActive)
+    OUTPUT INSERTED.LocationId
+    VALUES (@whId, 'STG-01', 'Staging Area 01', 0, 1)
+  `);
+  return insRes.recordset[0].LocationId;
+}
+
 export const postingService = {
   async postGoodsReceipt(goodsReceiptId, userId) {
     return mssqlTransaction('DEFAULT', async (tx) => {
@@ -42,11 +62,12 @@ export const postingService = {
       const linesRes = await linesReq.query(`
         SELECT 
           GoodsReceiptLineId, ItemId, ItemSpecId, LotId, LotNo, 
-          WarehouseId, LocationId, UnitId, ReceivedQuantity, UnitCostSnapshot
+          WarehouseId, LocationId, UnitId, ReceivedQuantity, UnitCostSnapshot, PalletNo
         FROM dbo.GoodsReceiptLines
         WHERE GoodsReceiptId = @grId
       `);
       const lines = linesRes.recordset;
+      const stagingLocId = await getOrCreateStagingLocation(tx, gr.WarehouseId);
 
       for (const line of lines) {
         if (!line.ReceivedQuantity || line.ReceivedQuantity <= 0) continue;
@@ -61,8 +82,9 @@ export const postingService = {
           referenceType: 'GR',
           referenceId: goodsReceiptId,
           itemId: line.ItemId,
+          itemSpecId: line.ItemSpecId,
           toWarehouseId: line.WarehouseId,
-          toLocationId: line.LocationId,
+          toLocationId: stagingLocId,
           lotId: line.LotId,
           lotNo: line.LotNo,
           quantity: qty,
@@ -77,7 +99,7 @@ export const postingService = {
           itemId: line.ItemId,
           itemSpecId: line.ItemSpecId,
           warehouseId: line.WarehouseId,
-          locationId: line.LocationId,
+          locationId: stagingLocId,
           lotId: line.LotId,
           lotNo: line.LotNo,
           quantityDelta: qty
@@ -87,6 +109,7 @@ export const postingService = {
         await costingService.insertValuationMovement(tx, {
           stockMovementId: movementId,
           itemId: line.ItemId,
+          itemSpecId: line.ItemSpecId,
           lotId: line.LotId,
           quantity: qty,
           unitCost: cost,
@@ -97,6 +120,7 @@ export const postingService = {
         // 6. Create InventoryCostLayer (using costingService)
         await costingService.addCostLayer(tx, {
           itemId: line.ItemId,
+          itemSpecId: line.ItemSpecId,
           lotId: line.LotId,
           warehouseId: line.WarehouseId,
           movementId: movementId,
@@ -137,8 +161,9 @@ export const postingService = {
           itemSpecId: line.ItemSpecId,
           lotId: line.LotId,
           quantityRequired: line.ReceivedQuantity,
-          fromLocationId: line.LocationId, // Staging/Receiving location
-          toLocationId: null // Let WMS app user scan the putaway location
+          fromLocationId: stagingLocId, // Staging/Receiving location
+          toLocationId: line.LocationId || null, // Recommended target storage location
+          palletNo: line.PalletNo
         }))
       }, tx);
 
@@ -188,6 +213,7 @@ export const postingService = {
           // 3. Consume FIFO Layers (using costingService)
           const { totalValuationCost, avgUnitCost } = await costingService.consumeFifoLayers(tx, {
             itemId: line.ItemId,
+            itemSpecId: line.ItemSpecId,
             warehouseId: line.WarehouseId,
             lotId: line.LotId,
             quantityToConsume: line.IssuedQuantity
@@ -199,6 +225,7 @@ export const postingService = {
             referenceType: 'GI',
             referenceId: goodsIssueId,
             itemId: line.ItemId,
+            itemSpecId: line.ItemSpecId,
             fromWarehouseId: line.WarehouseId,
             fromLocationId: line.LocationId,
             lotId: line.LotId,
@@ -223,6 +250,7 @@ export const postingService = {
           await costingService.insertValuationMovement(tx, {
             stockMovementId: movementId,
             itemId: line.ItemId,
+            itemSpecId: line.ItemSpecId,
             lotId: line.LotId,
             quantity: -line.IssuedQuantity,
             unitCost: avgUnitCost,

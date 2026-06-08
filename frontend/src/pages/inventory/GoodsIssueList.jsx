@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { PlusOutlined, EyeOutlined, EditOutlined } from "@ant-design/icons";
+import { PlusOutlined, EyeOutlined, EditOutlined, PrinterOutlined } from "@ant-design/icons";
 import { Button, Card, Col, DatePicker, Input, Row, Select, Space, Table, Tag, Typography, message } from "antd";
 import { useNavigate } from "react-router-dom";
 import { useGoodsIssue } from "../../context/GoodsIssueContext.jsx";
@@ -157,6 +157,13 @@ export default function GoodsIssueList() {
                             แก้ไข
                         </Button>
                     )}
+                    <Button
+                        type="link"
+                        icon={<PrinterOutlined />}
+                        onClick={() => window.open(`/document/print?form=GI&docId=${record.id}`, '_blank')}
+                    >
+                        พิมพ์รายการ
+                    </Button>
                 </Space>
             ),
         },
@@ -248,6 +255,7 @@ export default function GoodsIssueList() {
                     },
                     showSizeChanger: true,
                 }}
+                scroll={{ x: 'max-content' }}
             />
         </Card>
     );

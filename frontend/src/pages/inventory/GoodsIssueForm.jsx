@@ -305,6 +305,7 @@ export default function GoodsIssueForm() {
             width: "20%",
             render: (record, _, idx) => (
                 <Select
+                    size="small"
                     showSearch
                     allowClear
                     filterOption={false}
@@ -350,6 +351,7 @@ export default function GoodsIssueForm() {
             width: "12%",
             render: (record, _, idx) => (
                 <Select
+                    size="small"
                     placeholder="หน่วย"
                     style={{ width: "100%" }}
                     value={record.unitId || undefined}
@@ -369,6 +371,7 @@ export default function GoodsIssueForm() {
             width: "8%",
             render: (record, _, idx) => (
                 <InputNumber
+                    size="small"
                     min={0.0001}
                     style={{ width: "100%" }}
                     value={record.requestedQuantity}
@@ -382,6 +385,7 @@ export default function GoodsIssueForm() {
             width: "15%",
             render: (record, _, idx) => (
                 <Select
+                    size="small"
                     placeholder="ไม่ระบุ"
                     style={{ width: "100%" }}
                     value={record.locationId}
@@ -402,6 +406,7 @@ export default function GoodsIssueForm() {
             width: "15%",
             render: (record, _, idx) => (
                 <Input
+                    size="small"
                     placeholder="แมนนวลล็อต"
                     value={record.lotNo}
                     onChange={(e) => handleLineFieldChange(e.target.value, "lotNo", idx)}
@@ -529,6 +534,7 @@ export default function GoodsIssueForm() {
                 </div>
 
                 <Table
+                    size="small"
                     columns={columns}
                     dataSource={lineItems}
                     pagination={false}

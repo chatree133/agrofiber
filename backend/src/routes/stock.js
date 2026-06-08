@@ -227,6 +227,8 @@ router.get(
         sm.ItemId,
         i.ItemCode,
         i.ItemName,
+        ispec.SalesSKU,
+        ispec.SpecName,
         sm.FromWarehouseId,
         fwh.WarehouseCode AS FromWarehouseCode,
         fwh.WarehouseName AS FromWarehouseName,
@@ -258,6 +260,19 @@ router.get(
       LEFT JOIN dbo.WarehouseLocations floc ON floc.LocationId = sm.FromLocationId
       LEFT JOIN dbo.WarehouseLocations tloc ON tloc.LocationId = sm.ToLocationId
       LEFT JOIN dbo.Units u ON u.UnitId = sm.UnitId
+      LEFT JOIN dbo.ItemSpecs ispec ON ispec.ItemSpecId = COALESCE(
+        (SELECT TOP 1 ItemSpecId FROM dbo.GoodsReceiptLines WHERE LotId = sm.LotId),
+        (SELECT TOP 1 ItemSpecId FROM dbo.InventoryUnits WHERE LotId = sm.LotId),
+        (SELECT TOP 1 ItemSpecId FROM dbo.StockOnHand WHERE LotId = sm.LotId),
+        (SELECT TOP 1 ItemSpecId FROM dbo.InventoryReservations WHERE LotId = sm.LotId),
+        (SELECT TOP 1 ItemSpecId FROM dbo.GoodsIssueLines WHERE LotId = sm.LotId),
+        (SELECT TOP 1 ItemSpecId FROM dbo.WmsTaskLines WHERE LotId = sm.LotId),
+        CASE 
+          WHEN sm.ReferenceType IN ('GoodsReceipt', 'GR') THEN (SELECT TOP 1 ItemSpecId FROM dbo.GoodsReceiptLines WHERE GoodsReceiptId = sm.ReferenceId AND ItemId = sm.ItemId)
+          WHEN sm.ReferenceType IN ('GoodsIssue', 'GI')   THEN (SELECT TOP 1 ItemSpecId FROM dbo.GoodsIssueLines   WHERE GoodsIssueId   = sm.ReferenceId AND ItemId = sm.ItemId)
+          ELSE NULL
+        END
+      )
       ORDER BY sm.CreatedAt DESC, sm.StockMovementId DESC
       OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
     `, {
@@ -277,6 +292,8 @@ router.get(
         itemId: r.ItemId,
         itemCode: r.ItemCode,
         itemName: r.ItemName,
+        salesSku: r.SalesSKU,
+        specName: r.SpecName,
         fromWarehouseId: r.FromWarehouseId,
         fromWarehouseCode: r.FromWarehouseCode,
         fromWarehouseName: r.FromWarehouseName,

@@ -22,8 +22,11 @@ import WorkflowSettings from './pages/master/WorkflowSettings.jsx';
 import QuotationCreate from './pages/quotation/QuotationCreate.jsx';
 import QuotationList from './pages/quotation/QuotationList.jsx';
 import StockCheck from './pages/inventory/StockCheck.jsx';
+import StockList from './pages/inventory/StockList.jsx';
+import InventoryReports from './pages/inventory/InventoryReports.jsx';
 import DocumentPrint from './pages/document/DocumentPrint.jsx';
 import ApprovalsDashboard from './pages/audit/ApprovalsDashboard.jsx';
+import Receiving from './pages/wms/Receiving.jsx';
 import PickingList from './pages/wms/PickingList.jsx';
 import WavePickingDetail from './pages/wms/WavePickingDetail.jsx';
 import DeliveryOrderList from './pages/deliveryorder/DeliveryOrderList.jsx';
@@ -73,6 +76,8 @@ function AppRoutes() {
         <Route path="quotation/create" element={<QuotationCreate />} />
         <Route path="quotation/list" element={<QuotationList />} />
         <Route path="inventory/stock-check" element={<StockCheck />} />
+        <Route path="inventory/stock" element={<StockList />} />
+        <Route path="inventory/reports" element={<InventoryReports />} />
         
         {/* Goods Issue Routes */}
         <Route path="inventory/goods-issues" element={<GoodsIssueList />} />
@@ -93,6 +98,7 @@ function AppRoutes() {
         <Route path="audit/approvals" element={<ApprovalsDashboard />} />
         
         {/* WMS Routes */}
+        <Route path="wms/receiving" element={<Receiving />} />
         <Route path="wms/picking" element={<PickingList />} />
         <Route path="wms/waves/:id" element={<WavePickingDetail />} />
         

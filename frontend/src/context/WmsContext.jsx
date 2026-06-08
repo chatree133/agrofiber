@@ -27,6 +27,11 @@ export function WmsProvider({ children }) {
     return res.data;
   };
 
+  const getWmsTaskDetail = async (id) => {
+    const res = await ApiClient.get(`/api/wms/tasks/${id}`, { headers: authHeaders });
+    return res.data;
+  };
+
   const confirmWmsTask = async (taskId, payload) => {
     const res = await ApiClient.post(`/api/wms/tasks/${taskId}/confirm`, payload, { headers: authHeaders });
     return res.data;
@@ -47,15 +52,22 @@ export function WmsProvider({ children }) {
     return res.data;
   };
 
+  const getLastLocation = async (params) => {
+    const res = await ApiClient.get('/api/wms/items/last-location', { headers: authHeaders, params });
+    return res.data;
+  };
+
   const value = useMemo(() => ({
     getWmsTasks,
+    getWmsTaskDetail,
     getWmsWaves,
     createWmsWave,
     getWmsWaveDetail,
     confirmWmsTask,
     getWarehouseLocations,
     allocateWaveInventory,
-    splitWmsTaskLine
+    splitWmsTaskLine,
+    getLastLocation
   }), [authHeaders]);
 
   return (

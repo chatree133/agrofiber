@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Button, Card, Checkbox, Space, Table, Tabs, Tag, Typography, message, Pagination } from 'antd';
-import { AppstoreOutlined, PlusOutlined, UnorderedListOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, PlusOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useWms } from '../../context/WmsContext.jsx';
 
@@ -9,7 +9,7 @@ const { Title, Text } = Typography;
 export default function PickingList() {
   const navigate = useNavigate();
   const { getWmsTasks, getWmsWaves, createWmsWave } = useWms();
-  const [activeTab, setActiveTab] = useState('tasks');
+  const [activeTab, setActiveTab] = useState('waves');
   const [tasks, setTasks] = useState([]);
   const [waves, setWaves] = useState([]);
   const [loadingTasks, setLoadingTasks] = useState(false);
@@ -145,11 +145,12 @@ export default function PickingList() {
       render: (date) => new Date(date).toLocaleString('th-TH'),
     },
     {
+      fixed: 'right',
       title: 'การกระทำ',
       key: 'actions',
       render: (_, r) => (
-        <Button type="link" onClick={() => navigate(`/wms/waves/${r.id}`)}>
-          จัดการงานหยิบ
+        <Button type="primary" size="small" icon={<PlayCircleOutlined />} onClick={() => navigate(`/wms/waves/${r.id}`)}>
+          ดำเนินการหยิบ
         </Button>
       ),
     },
@@ -157,13 +158,13 @@ export default function PickingList() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-slate-800">
-            ระบบบริหารจัดการคลังสินค้า (WMS)
-          </h1>
-          <Text type="secondary">จัดการคลื่นใบงานและคอนเฟิร์มหยิบสินค้าออกจากคลัง</Text>
-        </div>
+      <div className="flex flex-col">
+        <h1 className="text-lg font-semibold text-slate-800">
+          ระบบบริหารจัดการคลังสินค้า (WMS)
+        </h1>
+        <Text type="secondary" className="text-sm">
+          จัดการคลื่นใบงานและคอนเฟิร์มหยิบสินค้าออกจากคลัง
+        </Text>
       </div>
 
       <Card className="shadow-sm">
@@ -179,7 +180,7 @@ export default function PickingList() {
                 </span>
               ),
               children: (
-                <div className="flex flex-col gap-4">
+                <div className="flex flex-col">
                   <div className="flex justify-end items-center gap-4 mb-2">
                     <span className="text-slate-500 text-sm">
                       {waves.length ? (wavePage - 1) * pageSize + 1 : 0}-
@@ -199,7 +200,7 @@ export default function PickingList() {
                     dataSource={waves.slice((wavePage - 1) * pageSize, wavePage * pageSize).map((w) => ({ ...w, key: w.id }))}
                     loading={loadingWaves}
                     pagination={false}
-                    scroll={{ x: 800 }}
+                    scroll={{ x: 1000 }}
                   />
                 </div>
               ),

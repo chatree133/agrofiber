@@ -1797,8 +1797,8 @@ VALUES ('VAT7', N'ภาษีมูลค่าเพิ่ม 7%', 7.0000, 1),
 INSERT INTO dbo.PricingMethods (PricingMethodCode, PricingMethodName, Description)
 VALUES
     ('FIXED_PRICE', N'Fixed Price', N'ใช้ราคาขายมาตรฐานของสินค้า หรือราคาที่กำหนดไว้ใน price list/สัญญา'),
-    ('COST_PLUS', N'Cost Plus', N'คำนวณราคาขายจากต้นทุนสินค้า บวก markup ตามเปอร์เซ็นต์ที่กำหนด'),
-    ('MARGIN_BASED', N'Margin Based', N'คำนวณราคาขายจากต้นทุนสินค้า เพื่อให้ได้ margin ตามเปอร์เซ็นต์เป้าหมาย'),
+    ('MARKUP', N'Cost Plus', N'คำนวณราคาขายจากต้นทุนสินค้า บวก markup ตามเปอร์เซ็นต์ที่กำหนด'),
+    ('MARGIN', N'Margin Based', N'คำนวณราคาขายจากต้นทุนสินค้า เพื่อให้ได้ margin ตามเปอร์เซ็นต์เป้าหมาย'),
     ('LOT_BASED', N'Lot-Based', N'กำหนดราคาตาม lot/batch โดยอ้างอิงต้นทุนหรือราคาของ lot นั้น'),
     ('DISCOUNT_PERCENT', N'Discount Percent', N'คำนวณราคาขายโดยลดจากราคามาตรฐานตามเปอร์เซ็นต์ที่กำหนด'),
     ('DISCOUNT_AMOUNT', N'Discount Amount', N'คำนวณราคาขายโดยลดจากราคามาตรฐานตามจำนวนที่กำหนด')

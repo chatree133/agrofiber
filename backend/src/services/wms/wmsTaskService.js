@@ -1,4 +1,5 @@
 import { sql, mssqlQuery, mssqlTransaction } from '../../lib/mssql.js';
+import { stockService } from '../inventory/stockService.js';
 
 function badRequest(message) {
   const error = new Error(message);
@@ -58,15 +59,16 @@ export const wmsTaskService = {
         lineReq.input('toLoc', sql.Int, line.toLocationId || null);
         lineReq.input('qty', sql.Decimal(18, 4), line.quantityRequired);
         lineReq.input('remark', sql.NVarChar(1000), line.remark || null);
+        lineReq.input('palletNo', sql.NVarChar(100), line.palletNo || null);
 
         await lineReq.query(`
           INSERT INTO dbo.WmsTaskLines (
             WmsTaskId, ItemId, ItemSpecId, LotId, InventoryReservationId, InventoryUnitId,
-            FromLocationId, ToLocationId, QuantityRequired, QuantityCompleted, Remark
+            FromLocationId, ToLocationId, QuantityRequired, QuantityCompleted, Remark, PalletNo
           )
           VALUES (
             @taskId, @itemId, @itemSpecId, @lotId, @reservationId, @unitId,
-            @fromLoc, @toLoc, @qty, 0, @remark
+            @fromLoc, @toLoc, @qty, 0, @remark, @palletNo
           )
         `);
       }
@@ -158,7 +160,7 @@ export const wmsTaskService = {
         l.ToLocationId, tl.LocationCode AS ToLocationCode,
         l.QuantityRequired, l.QuantityCompleted,
         ispec.SalesSKU, ispec.SpecCode, ispec.SpecName,
-        l.Remark
+        l.Remark, l.PalletNo
       FROM dbo.WmsTaskLines l
       JOIN dbo.Items i ON i.ItemId = l.ItemId
       LEFT JOIN dbo.ItemSpecs ispec ON ispec.ItemSpecId = l.ItemSpecId
@@ -201,7 +203,8 @@ export const wmsTaskService = {
         toLocationCode: l.ToLocationCode,
         quantityRequired: l.QuantityRequired,
         quantityCompleted: l.QuantityCompleted,
-        remark: l.Remark || null
+        remark: l.Remark || null,
+        palletNo: l.PalletNo
       }))
     };
   },
@@ -339,7 +342,7 @@ export const wmsTaskService = {
 
         const qtyCompleted = line.quantityCompleted || 0;
         const lotId = line.lotId || null;
-        const inventoryUnitId = line.inventoryUnitId || null;
+        let inventoryUnitId = line.inventoryUnitId || null;
         const fromLocationId = line.fromLocationId || null;
         const toLocationId = line.toLocationId || null;
 
@@ -348,18 +351,177 @@ export const wmsTaskService = {
         lineReq.input('taskId', sql.BigInt, taskId);
         lineReq.input('qty', sql.Decimal(18, 4), qtyCompleted);
         lineReq.input('lotId', sql.BigInt, lotId);
-        lineReq.input('unitId', sql.BigInt, inventoryUnitId);
         lineReq.input('fromLoc', sql.Int, fromLocationId);
         lineReq.input('toLoc', sql.Int, toLocationId);
 
-        // Fetch task line details to get reservation
+        // Fetch task line details to get reservation and item info
         const taskLineRes = await lineReq.query(`
-          SELECT InventoryReservationId, ItemId
+          SELECT InventoryReservationId, ItemId, ItemSpecId, LotId, FromLocationId, ToLocationId, QuantityRequired
           FROM dbo.WmsTaskLines
           WHERE WmsTaskLineId = @lineId AND WmsTaskId = @taskId
         `);
         const taskLine = taskLineRes.recordset[0];
         if (!taskLine) continue;
+
+        // Resolve inventoryUnitId if a custom palletNo is scanned/provided
+        const inputPalletNo = line.palletNo || line.palletId || null;
+        if (inputPalletNo) {
+          const iuLookupRes = await tx.request()
+            .input('palletNo', sql.NVarChar(100), inputPalletNo.trim())
+            .input('itemId', sql.Int, taskLine.ItemId)
+            .query(`
+              SELECT TOP 1 InventoryUnitId 
+              FROM dbo.InventoryUnits 
+              WHERE (PalletNo = @palletNo OR TrackingNo = @palletNo) AND ItemId = @itemId
+            `);
+          if (iuLookupRes.recordset.length > 0) {
+            inventoryUnitId = iuLookupRes.recordset[0].InventoryUnitId;
+          }
+        }
+
+        // If it's a picking task, deduct from the source InventoryUnit
+        if (task.TaskType === 'picking' && inventoryUnitId && qtyCompleted > 0) {
+          await tx.request()
+            .input('unitId', sql.BigInt, inventoryUnitId)
+            .input('qty', sql.Decimal(18, 4), qtyCompleted)
+            .query(`
+              UPDATE dbo.InventoryUnits
+              SET QtySheet = CASE WHEN QtySheet - @qty >= 0 THEN QtySheet - @qty ELSE 0 END
+              WHERE InventoryUnitId = @unitId
+            `);
+          
+          await tx.request()
+            .input('unitId', sql.BigInt, inventoryUnitId)
+            .query(`
+              DELETE FROM dbo.InventoryUnits
+              WHERE InventoryUnitId = @unitId AND QtySheet <= 0
+            `);
+        }
+
+        // If it's a putaway task and toLocationId is specified, create or update the InventoryUnit
+        if (task.TaskType === 'putaway' && toLocationId) {
+          const finalLotId = lotId || taskLine.LotId;
+          let lotNo = '';
+          if (finalLotId) {
+            const lotRes = await tx.request()
+              .input('lotId', sql.BigInt, finalLotId)
+              .query(`SELECT LotNo FROM dbo.Lots WHERE LotId = @lotId`);
+            if (lotRes.recordset.length > 0) {
+              lotNo = lotRes.recordset[0].LotNo;
+            }
+          }
+          
+          let trackNo = line.palletId || line.palletNo || taskLine.PalletNo;
+          if (!trackNo) {
+            const yy = String(new Date().getFullYear()).slice(-2); // e.g. '26'
+            const prefix = `PLT${yy}`;
+            const maxRes = await tx.request()
+              .input('prefix', sql.NVarChar(20), prefix + '%')
+              .query(`
+                SELECT MAX(PalletNo) AS MaxPalletNo
+                FROM (
+                  SELECT TrackingNo AS PalletNo FROM dbo.InventoryUnits WHERE TrackingNo LIKE @prefix
+                  UNION ALL
+                  SELECT PalletNo FROM dbo.GoodsReceiptLines WHERE PalletNo LIKE @prefix
+                  UNION ALL
+                  SELECT PalletNo FROM dbo.WmsTaskLines WHERE PalletNo LIKE @prefix
+                ) AS AllPallets
+              `);
+            let nextSeq = 1;
+            if (maxRes.recordset.length > 0 && maxRes.recordset[0].MaxPalletNo) {
+              const maxPalletNo = maxRes.recordset[0].MaxPalletNo;
+              const numPart = maxPalletNo.substring(prefix.length);
+              const num = parseInt(numPart, 10);
+              if (!isNaN(num)) {
+                nextSeq = num + 1;
+              }
+            }
+            trackNo = prefix + String(nextSeq).padStart(5, '0');
+          }
+          
+          // Check if InventoryUnit already exists with this TrackingNo
+          const iuRes = await tx.request()
+            .input('trackNo', sql.NVarChar(100), trackNo)
+            .query(`SELECT InventoryUnitId FROM dbo.InventoryUnits WHERE TrackingNo = @trackNo`);
+            
+          if (iuRes.recordset.length > 0) {
+            inventoryUnitId = iuRes.recordset[0].InventoryUnitId;
+            // Update quantity, location, and status
+            await tx.request()
+              .input('unitId', sql.BigInt, inventoryUnitId)
+              .input('qty', sql.Decimal(18, 4), qtyCompleted)
+              .input('locId', sql.Int, toLocationId)
+              .input('whId', sql.Int, task.WarehouseId)
+              .query(`
+                UPDATE dbo.InventoryUnits
+                SET QtySheet = QtySheet + @qty,
+                    LocationId = @locId,
+                    WarehouseId = @whId,
+                    InventoryStatus = 'available'
+                WHERE InventoryUnitId = @unitId
+              `);
+          } else {
+            // Insert new InventoryUnit
+            const insertIuRes = await tx.request()
+              .input('itemId', sql.Int, taskLine.ItemId)
+              .input('itemSpecId', sql.Int, taskLine.ItemSpecId || null)
+              .input('trackNo', sql.NVarChar(100), trackNo)
+              .input('lotId', sql.BigInt, finalLotId)
+              .input('whId', sql.Int, task.WarehouseId)
+              .input('locId', sql.Int, toLocationId)
+              .input('qty', sql.Decimal(18, 4), qtyCompleted)
+              .input('palletNo', sql.NVarChar(100), trackNo)
+              .query(`
+                INSERT INTO dbo.InventoryUnits (ItemId, ItemSpecId, TrackingNo, LotId, WarehouseId, LocationId, QtySheet, PalletNo, InventoryStatus)
+                OUTPUT INSERTED.InventoryUnitId
+                VALUES (@itemId, @itemSpecId, @trackNo, @lotId, @whId, @locId, @qty, @palletNo, 'available')
+              `);
+            inventoryUnitId = insertIuRes.recordset[0].InventoryUnitId;
+          }
+
+          // Relocate stock in StockOnHand (Deduct from staging / source, add to target)
+          if (taskLine.FromLocationId) {
+            await stockService.updateStockOnHand(tx, {
+              itemId: taskLine.ItemId,
+              itemSpecId: taskLine.ItemSpecId,
+              warehouseId: task.WarehouseId,
+              locationId: taskLine.FromLocationId,
+              lotId: finalLotId,
+              lotNo: lotNo,
+              quantityDelta: -qtyCompleted
+            });
+          }
+
+          await stockService.updateStockOnHand(tx, {
+            itemId: taskLine.ItemId,
+            itemSpecId: taskLine.ItemSpecId,
+            warehouseId: task.WarehouseId,
+            locationId: toLocationId,
+            lotId: finalLotId,
+            lotNo: lotNo,
+            quantityDelta: qtyCompleted
+          });
+
+          // Insert stock relocation movement
+          await stockService.insertStockMovement(tx, {
+            movementType: 'transfer',
+            referenceType: 'WMS',
+            referenceId: taskId,
+            itemId: taskLine.ItemId,
+            itemSpecId: taskLine.ItemSpecId,
+            fromWarehouseId: task.WarehouseId,
+            fromLocationId: taskLine.FromLocationId,
+            toWarehouseId: task.WarehouseId,
+            toLocationId: toLocationId,
+            lotId: finalLotId,
+            lotNo: lotNo,
+            quantity: qtyCompleted,
+            createdBy: userId || 1
+          });
+        }
+
+        lineReq.input('unitId', sql.BigInt, inventoryUnitId);
+        lineReq.input('palletNo', sql.NVarChar(100), line.palletId || line.palletNo || taskLine.PalletNo || null);
 
         await lineReq.query(`
           UPDATE dbo.WmsTaskLines
@@ -368,9 +530,12 @@ export const wmsTaskService = {
             LotId = COALESCE(@lotId, LotId),
             InventoryUnitId = COALESCE(@unitId, InventoryUnitId),
             FromLocationId = COALESCE(@fromLoc, FromLocationId),
-            ToLocationId = COALESCE(@toLoc, ToLocationId)
+            ToLocationId = COALESCE(@toLoc, ToLocationId),
+            PalletNo = COALESCE(@palletNo, PalletNo)
           WHERE WmsTaskLineId = @lineId AND WmsTaskId = @taskId
         `);
+
+
 
         // If it references an inventory reservation, update the reservation
         if (taskLine.InventoryReservationId) {
@@ -413,6 +578,112 @@ export const wmsTaskService = {
         INSERT INTO dbo.DocumentStatusHistory (DocumentType, DocumentId, FromStatus, ToStatus, ChangedBy, Notes)
         VALUES ('WMS_TASK', @taskId, 'open', 'completed', @userId, 'Picking task completed and confirmed')
       `);
+
+      // 3.1 If the task references a Goods Issue (GI), rebuild GoodsIssueLines with actual picked/split data and log GI audit trail
+      if (task.ReferenceType === 'GI' && task.ReferenceId && task.TaskType === 'picking') {
+        const giId = task.ReferenceId;
+
+        // Fetch original GoodsIssueLines metadata to preserve unit and dimensions
+        const origLinesRes = await tx.request()
+          .input('giId', sql.Int, giId)
+          .query(`
+            SELECT ItemId, ItemSpecId, UnitId, ProductTypeId, ThicknessId, WidthId, LengthId, Remark
+            FROM dbo.GoodsIssueLines
+            WHERE GoodsIssueId = @giId
+          `);
+        const origLines = origLinesRes.recordset;
+
+        // Fetch actual picked lines from WmsTaskLines
+        const completedLinesRes = await tx.request()
+          .input('taskId', sql.BigInt, taskId)
+          .query(`
+            SELECT ItemId, ItemSpecId, LotId, FromLocationId, QuantityRequired, QuantityCompleted, PalletNo, Remark
+            FROM dbo.WmsTaskLines
+            WHERE WmsTaskId = @taskId AND QuantityCompleted > 0
+          `);
+        const completedLines = completedLinesRes.recordset;
+
+        if (completedLines.length > 0) {
+          // Delete old lines
+          await tx.request()
+            .input('giId', sql.Int, giId)
+            .query(`DELETE FROM dbo.GoodsIssueLines WHERE GoodsIssueId = @giId`);
+
+          // Insert new lines mirroring the actual picks (handles splits perfectly)
+          for (let idx = 0; idx < completedLines.length; idx++) {
+            const pick = completedLines[idx];
+            const orig = origLines.find(o => o.ItemId === pick.ItemId && (o.ItemSpecId === pick.ItemSpecId || (o.ItemSpecId === null && pick.ItemSpecId === null))) || {};
+
+            const insReq = new sql.Request(tx);
+            insReq.input('giId', sql.Int, giId);
+            insReq.input('lineNum', sql.Int, idx + 1);
+            insReq.input('itemId', sql.Int, pick.ItemId);
+            insReq.input('itemSpecId', sql.Int, pick.ItemSpecId);
+            insReq.input('lotId', sql.BigInt, pick.LotId);
+            insReq.input('warehouseId', sql.Int, task.WarehouseId);
+            insReq.input('locationId', sql.Int, pick.FromLocationId);
+            insReq.input('unitId', sql.Int, orig.UnitId || 1);
+            insReq.input('reqQty', sql.Decimal(18, 4), pick.QuantityRequired);
+            insReq.input('issQty', sql.Decimal(18, 4), pick.QuantityCompleted);
+            insReq.input('prodType', sql.Int, orig.ProductTypeId);
+            insReq.input('thickness', sql.Int, orig.ThicknessId);
+            insReq.input('width', sql.Int, orig.WidthId);
+            insReq.input('length', sql.Int, orig.LengthId);
+            insReq.input('remark', sql.NVarChar(1000), pick.Remark || orig.Remark);
+            insReq.input('palletNo', sql.NVarChar(100), pick.PalletNo);
+
+            await insReq.query(`
+              INSERT INTO dbo.GoodsIssueLines (
+                GoodsIssueId, LineNum, ItemId, ItemSpecId, LotId, WarehouseId, LocationId, UnitId,
+                RequestedQuantity, IssuedQuantity, RequestedSheetQty, IssuedSheetQty,
+                ProductTypeId, ThicknessId, WidthId, LengthId, Remark, PalletNo
+              ) VALUES (
+                @giId, @lineNum, @itemId, @itemSpecId, @lotId, @warehouseId, @locationId, @unitId,
+                @reqQty, @issQty, @reqQty, @issQty,
+                @prodType, @thickness, @width, @length, @remark, @palletNo
+              )
+            `);
+          }
+
+          // Recalculate totals and update GI Header
+          const sumRes = await tx.request()
+            .input('giId', sql.Int, giId)
+            .query(`
+              SELECT 
+                SUM(RequestedSheetQty) AS ReqTotal,
+                SUM(IssuedSheetQty) AS IssTotal,
+                COUNT(DISTINCT PalletNo) AS PalletTotal
+              FROM dbo.GoodsIssueLines
+              WHERE GoodsIssueId = @giId
+            `);
+          const sums = sumRes.recordset[0];
+
+          await tx.request()
+            .input('giId', sql.Int, giId)
+            .input('reqTotal', sql.Decimal(18, 4), sums?.ReqTotal || 0)
+            .input('issTotal', sql.Decimal(18, 4), sums?.IssTotal || 0)
+            .input('palletTotal', sql.Decimal(18, 4), sums?.PalletTotal || 0)
+            .query(`
+              UPDATE dbo.GoodsIssues
+              SET
+                RequestedSheetTotal = @reqTotal,
+                IssuedSheetTotal = @issTotal,
+                PalletCountTotal = @palletTotal,
+                UpdatedAt = SYSUTCDATETIME()
+              WHERE GoodsIssueId = @giId
+            `);
+
+          // Write GI Status history as Audit Trail for override
+          await tx.request()
+            .input('giId', sql.Int, giId)
+            .input('userId', sql.Int, userId)
+            .input('taskId', sql.BigInt, taskId)
+            .query(`
+              INSERT INTO dbo.DocumentStatusHistory (DocumentType, DocumentId, FromStatus, ToStatus, ChangedBy, Notes)
+              VALUES ('GI', @giId, 'approved', 'approved', @userId, 'Lines rebuilt with actual picked data from WMS Task #' + CAST(@taskId AS VARCHAR))
+            `);
+        }
+      }
 
       // If task belongs to a wave, check if all tasks in wave are completed
       if (task.WaveId) {
@@ -530,7 +801,7 @@ export const wmsTaskService = {
     const linesReq = new sql.Request(tx);
     linesReq.input('waveId', sql.Int, waveId);
     const linesRes = await linesReq.query(`
-      SELECT tl.WmsTaskLineId, tl.WmsTaskId, tl.ItemId, tl.ItemSpecId, tl.QuantityRequired, t.WarehouseId
+      SELECT tl.WmsTaskLineId, tl.WmsTaskId, tl.ItemId, tl.ItemSpecId, tl.QuantityRequired, t.WarehouseId, tl.LotId, tl.FromLocationId
       FROM dbo.WmsTaskLines tl
       JOIN dbo.WmsTasks t ON t.WmsTaskId = tl.WmsTaskId
       WHERE t.WaveId = @waveId AND tl.QuantityCompleted = 0 AND t.Status <> 'completed'
@@ -543,8 +814,9 @@ export const wmsTaskService = {
       stockReq.input('itemId', sql.Int, line.ItemId);
       stockReq.input('itemSpecId', sql.Int, line.ItemSpecId || null);
       stockReq.input('whId', sql.Int, line.WarehouseId);
+      stockReq.input('currentLineId', sql.BigInt, line.WmsTaskLineId);
 
-      const stockRes = await stockReq.query(`
+      let stockQuery = `
         SELECT iu.InventoryUnitId, iu.LocationId, iu.LotId, lot.LotNo, iu.PalletNo, 
                (iu.QtySheet - ISNULL((
                  SELECT SUM(tl.QuantityRequired - tl.QuantityCompleted)
@@ -552,21 +824,37 @@ export const wmsTaskService = {
                  JOIN dbo.WmsTasks t ON t.WmsTaskId = tl.WmsTaskId
                  WHERE tl.InventoryUnitId = iu.InventoryUnitId
                    AND t.Status = 'open'
+                   AND tl.WmsTaskLineId <> @currentLineId
                ), 0)) AS AvailableQty
         FROM dbo.InventoryUnits iu
         JOIN dbo.Lots lot ON lot.LotId = iu.LotId
         WHERE iu.ItemId = @itemId
           AND (iu.ItemSpecId = @itemSpecId OR (iu.ItemSpecId IS NULL AND @itemSpecId IS NULL))
           AND iu.WarehouseId = @whId
+      `;
+
+      if (line.LotId) {
+        stockQuery += ` AND iu.LotId = @specificLotId`;
+        stockReq.input('specificLotId', sql.BigInt, line.LotId);
+      }
+      if (line.FromLocationId) {
+        stockQuery += ` AND iu.LocationId = @specificLocId`;
+        stockReq.input('specificLocId', sql.Int, line.FromLocationId);
+      }
+
+      stockQuery += `
           AND (iu.QtySheet - ISNULL((
                  SELECT SUM(tl.QuantityRequired - tl.QuantityCompleted)
                  FROM dbo.WmsTaskLines tl
                  JOIN dbo.WmsTasks t ON t.WmsTaskId = tl.WmsTaskId
                  WHERE tl.InventoryUnitId = iu.InventoryUnitId
                    AND t.Status = 'open'
+                   AND tl.WmsTaskLineId <> @currentLineId
                ), 0)) > 0
         ORDER BY lot.CreatedAt ASC
-      `);
+      `;
+
+      const stockRes = await stockReq.query(stockQuery);
 
       let remainingToAllocate = line.QuantityRequired;
       const stockLayers = stockRes.recordset;
@@ -820,6 +1108,47 @@ export const wmsTaskService = {
     } else {
       return await mssqlTransaction('DEFAULT', execute);
     }
+  },
+
+  async getLastLocation({ itemId, itemSpecId = null, warehouseId }) {
+    const query = `
+      SELECT TOP 1 wl.LocationId, wl.LocationCode
+      FROM (
+        SELECT tl.ToLocationId AS LocationId, t.CompletedAt AS Date
+        FROM dbo.WmsTaskLines tl
+        JOIN dbo.WmsTasks t ON t.WmsTaskId = tl.WmsTaskId
+        WHERE tl.ItemId = @itemId
+          AND (tl.ItemSpecId = @itemSpecId OR (tl.ItemSpecId IS NULL AND @itemSpecId IS NULL))
+          AND t.WarehouseId = @warehouseId
+          AND t.Status = 'completed'
+          AND t.TaskType = 'putaway'
+          AND tl.ToLocationId IS NOT NULL
+        
+        UNION ALL
+        
+        SELECT LocationId, CreatedAt AS Date
+        FROM dbo.InventoryUnits
+        WHERE ItemId = @itemId
+          AND (ItemSpecId = @itemSpecId OR (ItemSpecId IS NULL AND @itemSpecId IS NULL))
+          AND WarehouseId = @warehouseId
+          AND LocationId IS NOT NULL
+      ) AS Locations
+      JOIN dbo.WarehouseLocations wl ON wl.LocationId = Locations.LocationId
+      ORDER BY Locations.Date DESC
+    `;
+
+    const inputs = {
+      itemId: { type: sql.Int, value: itemId },
+      itemSpecId: { type: sql.Int, value: itemSpecId },
+      warehouseId: { type: sql.Int, value: warehouseId }
+    };
+
+    const rows = await mssqlQuery('DEFAULT', query, { inputs });
+    if (rows.length === 0) return null;
+    return {
+      locationId: rows[0].LocationId,
+      locationCode: rows[0].LocationCode
+    };
   }
 };
 

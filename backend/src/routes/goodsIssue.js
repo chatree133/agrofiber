@@ -116,6 +116,7 @@ function mapGoodsIssueLine(row) {
     salesSKU: row.SalesSKU,
     lotId: row.LotId,
     lotNo: row.LotNo,
+    grade: row.Grade,
     warehouseId: row.WarehouseId,
     warehouseCode: row.WarehouseCode,
     warehouseName: row.WarehouseName,
@@ -136,6 +137,7 @@ function mapGoodsIssueLine(row) {
     widthId: row.WidthId,
     lengthId: row.LengthId,
     remark: row.Remark,
+    palletNo: row.PalletNo,
   };
 }
 
@@ -200,6 +202,7 @@ async function getGoodsIssueLines(goodsIssueId) {
       ispec.SalesSKU,
       gil.LotId,
       l.LotNo,
+      l.Grade,
       gil.WarehouseId,
       w.WarehouseCode,
       w.WarehouseName,
@@ -219,7 +222,8 @@ async function getGoodsIssueLines(goodsIssueId) {
       gil.ThicknessId,
       gil.WidthId,
       gil.LengthId,
-      gil.Remark
+      gil.Remark,
+      gil.PalletNo
     FROM dbo.GoodsIssueLines gil
     JOIN dbo.Items i ON i.ItemId = gil.ItemId
     JOIN dbo.Units u ON u.UnitId = gil.UnitId
@@ -311,11 +315,10 @@ async function resolveLineLots(tx, lineSnapshots, userId) {
         const ins = await tx.request()
           .input('itemId', sql.Int, line.itemId)
           .input('lotNo', sql.NVarChar(80), line.lotNo)
-          .input('createdBy', sql.Int, userId)
           .query(`
-            INSERT INTO dbo.Lots (ItemId, LotNo, QualityStatus, CreatedBy)
+            INSERT INTO dbo.Lots (ItemId, LotNo, QualityStatus)
             OUTPUT INSERTED.LotId
-            VALUES (@itemId, @lotNo, 'approved', @createdBy)
+            VALUES (@itemId, @lotNo, 'approved')
           `);
         line.lotId = ins.recordset[0].LotId;
       }
@@ -355,6 +358,7 @@ function buildLineSnapshots(rawLines) {
       widthId: parseOptionalId(raw.widthId, `lines[${idx}].widthId`),
       lengthId: parseOptionalId(raw.lengthId, `lines[${idx}].lengthId`),
       remark: raw.remark ? String(raw.remark).trim() : null,
+      palletNo: raw.palletNo ? String(raw.palletNo).trim() : null,
     });
   }
 
@@ -601,7 +605,7 @@ router.post(
     const requestDate = parseOptionalDate(req.body.requestDate, 'requestDate') || new Date();
     const issueDate = parseOptionalDate(req.body.issueDate, 'issueDate');
     const remark = req.body.remark ? String(req.body.remark).trim() : null;
-    const status = normalizeEnum(req.body.status, ['draft', 'requested'], 'status') || 'draft';
+    const status = normalizeEnum(req.body.status, ['draft', 'requested', 'approved'], 'status') || 'draft';
 
     const lineSnapshots = buildLineSnapshots(req.body.lines);
     const totals = calculateHeaderTotals(lineSnapshots);
@@ -667,16 +671,17 @@ router.post(
           lineReq.input('widthId', sql.Int, line.widthId);
           lineReq.input('lengthId', sql.Int, line.lengthId);
           lineReq.input('remark', sql.NVarChar(1000), line.remark);
+          lineReq.input('palletNo', sql.NVarChar(100), line.palletNo);
 
           await lineReq.query(`
             INSERT INTO dbo.GoodsIssueLines (
               GoodsIssueId, LineNum, ItemId, ItemSpecId, LotId, WarehouseId, LocationId, UnitId,
               RequestedQuantity, IssuedQuantity, RequestedSheetQty, IssuedSheetQty, LimitSheetQty,
-              PalletCount, M3Quantity, ProductTypeId, ThicknessId, WidthId, LengthId, Remark
+              PalletCount, M3Quantity, ProductTypeId, ThicknessId, WidthId, LengthId, Remark, PalletNo
             ) VALUES (
               @goodsIssueId, @lineNum, @itemId, @itemSpecId, @lotId, @warehouseId, @locationId, @unitId,
               @requestedQuantity, @issuedQuantity, @requestedSheetQty, @issuedSheetQty, @limitSheetQty,
-              @palletCount, @m3Quantity, @productTypeId, @thicknessId, @widthId, @lengthId, @remark
+              @palletCount, @m3Quantity, @productTypeId, @thicknessId, @widthId, @lengthId, @remark, @palletNo
             )
           `);
         }
@@ -801,17 +806,18 @@ router.put(
           lineReq.input('widthId', sql.Int, line.widthId);
           lineReq.input('lengthId', sql.Int, line.lengthId);
           lineReq.input('remark', sql.NVarChar(1000), line.remark);
+          lineReq.input('palletNo', sql.NVarChar(100), line.palletNo);
 
           await lineReq.query(`
             INSERT INTO dbo.GoodsIssueLines (
               GoodsIssueId, LineNum, ItemId, ItemSpecId, LotId, WarehouseId, LocationId, UnitId,
               RequestedQuantity, IssuedQuantity, RequestedSheetQty, IssuedSheetQty, LimitSheetQty,
-              PalletCount, M3Quantity, ProductTypeId, ThicknessId, WidthId, LengthId, Remark
+              PalletCount, M3Quantity, ProductTypeId, ThicknessId, WidthId, LengthId, Remark, PalletNo
             )
             VALUES (
               @goodsIssueId, @lineNum, @itemId, @itemSpecId, @lotId, @warehouseId, @locationId, @unitId,
               @requestedQuantity, @issuedQuantity, @requestedSheetQty, @issuedSheetQty, @limitSheetQty,
-              @palletCount, @m3Quantity, @productTypeId, @thicknessId, @widthId, @lengthId, @remark
+              @palletCount, @m3Quantity, @productTypeId, @thicknessId, @widthId, @lengthId, @remark, @palletNo
             )
           `);
         }

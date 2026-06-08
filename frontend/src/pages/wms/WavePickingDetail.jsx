@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Table, Tag, Typography, message, Modal, Checkbox } from 'antd';
-import { ArrowLeftOutlined, CheckCircleOutlined, PrinterOutlined, BranchesOutlined, BarcodeOutlined, UndoOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, CheckCircleOutlined, PrinterOutlined, BranchesOutlined, ScanOutlined, UndoOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useWms } from '../../context/WmsContext.jsx';
 import { useMasterData } from '../../context/MasterDataContext.jsx';
@@ -235,7 +235,8 @@ export default function WavePickingDetail() {
             lotId: line.lotId || null,
             fromLocationId: inputs.locationId || null,
             toLocationId: line.toLocationId || null,
-            inventoryUnitId: line.inventoryUnitId || null
+            inventoryUnitId: line.inventoryUnitId || null,
+            palletNo: inputs.palletNo || null
           };
         });
 
@@ -324,6 +325,7 @@ export default function WavePickingDetail() {
         const picked = lineInputs[r.id]?.isPicked;
         return (
           <Button
+            icon={<ScanOutlined />}
             type={picked ? 'primary' : 'default'}
             ghost={picked}
             size="small"
@@ -369,6 +371,13 @@ export default function WavePickingDetail() {
       )
     },
     {
+      title: 'เลขที่ Lot',
+      key: 'lotNo',
+      render: (_, r) => (
+        <Text>{r.lotNo || '-'}</Text>
+      )
+    },
+    {
       title: 'จำนวนต้องหยิบ',
       width: 120,
       dataIndex: 'quantityRequired',
@@ -384,6 +393,7 @@ export default function WavePickingDetail() {
           <Text>{r.quantityCompleted} แผ่น</Text>
         ) : (
           <InputNumber
+            size='small'
             min={0}
             value={val}
             onChange={(v) => handleInputChange(r.id, 'qtyCompleted', v)}
@@ -398,11 +408,12 @@ export default function WavePickingDetail() {
       key: 'locationId',
       render: (_, r) => {
         const val = lineInputs[r.id]?.locationId;
-        const isSuggested = r.fromLocationId && !r.quantityCompleted;
+        const isSuggested = val && r.fromLocationId && val === r.fromLocationId && !r.quantityCompleted;
         return r.taskStatus === 'completed' ? (
           <Text>{r.fromLocationCode || '-'}</Text>
         ) : (
           <Select
+            size='small'
             placeholder="เลือกตำแหน่ง"
             options={locations}
             value={val}
@@ -414,36 +425,20 @@ export default function WavePickingDetail() {
       }
     },
     {
-      title: 'ระบุ Lot',
-      key: 'lotNo',
-      render: (_, r) => {
-        const val = lineInputs[r.id]?.lotNo ?? '';
-        const isSuggested = r.lotNo && !r.quantityCompleted;
-        return r.taskStatus === 'completed' ? (
-          <Text>{r.lotNo || '-'}</Text>
-        ) : (
-          <Input
-            placeholder="เช่น LOT2026-A"
-            value={val}
-            onChange={(e) => handleInputChange(r.id, 'lotNo', e.target.value)}
-            style={{ width: '130px', borderColor: isSuggested ? '#52c41a' : undefined }}
-          />
-        );
-      }
-    },
-    {
       title: 'ระบุพาเลท',
       key: 'palletNo',
       render: (_, r) => {
         const val = lineInputs[r.id]?.palletNo ?? '';
+        const isSuggested = val && r.palletNo && val.trim().toLowerCase() === r.palletNo.trim().toLowerCase() && !r.quantityCompleted;
         return r.taskStatus === 'completed' ? (
           <Text>{r.palletNo || '-'}</Text>
         ) : (
           <Input
+            size='small'
             placeholder="เลขพาเลท"
             value={val}
             onChange={(e) => handleInputChange(r.id, 'palletNo', e.target.value)}
-            style={{ width: '120px' }}
+            style={{ width: '120px', borderColor: isSuggested ? '#52c41a' : undefined }}
           />
         );
       }
@@ -457,12 +452,12 @@ export default function WavePickingDetail() {
           <Space>
             {canSplit && (
               <Button
+                icon={<BranchesOutlined />}
                 size="small"
-                type="link"
-                danger
+                type="primary"
                 onClick={() => showSplitModal(r.id, r.taskId, r.quantityRequired, r.taskNo)}
               >
-                <BranchesOutlined />
+                กดแยก
               </Button>
             )}
           </Space>
@@ -643,7 +638,7 @@ export default function WavePickingDetail() {
                   className="font-mono text-base"
                 />
                 <Button
-                  icon={<BarcodeOutlined />}
+                  icon={<ScanOutlined />}
                   onClick={() => {
                     setScanTarget('location');
                     setScannerOpen(true);
@@ -668,7 +663,7 @@ export default function WavePickingDetail() {
                   className="font-mono text-base"
                 />
                 <Button
-                  icon={<BarcodeOutlined />}
+                  icon={<ScanOutlined />}
                   onClick={() => {
                     setScanTarget('pallet');
                     setScannerOpen(true);

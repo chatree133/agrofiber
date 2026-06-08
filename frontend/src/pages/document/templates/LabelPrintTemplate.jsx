@@ -3,8 +3,8 @@ import React from 'react';
 export default function LabelPrintTemplate({ docData, lineId }) {
   let lines = docData.lines || [];
 
-  // If lineId is provided, filter to print only that specific line
-  if (lineId) {
+  // If lineId is provided and not '0', filter to print only that specific line
+  if (lineId && lineId !== '0' && lineId !== 0) {
     lines = lines.filter(line => String(line.id || line.GoodsReceiptLineId) === String(lineId));
   }
 
@@ -16,7 +16,7 @@ export default function LabelPrintTemplate({ docData, lineId }) {
     <div className="flex flex-col gap-10">
       {lines.map((line, index) => {
         // Fallbacks for Location format
-        const locCode = line.locationCode || 'A-01-02-03';
+        const locCode = line.locationCode || 'STG-01';
         const parts = locCode.split('-');
         const zone = parts[0] || 'A';
         const aisle = parts[1] || '01';
@@ -24,9 +24,9 @@ export default function LabelPrintTemplate({ docData, lineId }) {
         const level = parts[3] || '03';
         const position = parts[4] || '-';
 
-        // Lot parsing - default to purely digits or lotNo
+        // Pallet ID parsing - running sequence takes priority, fallback to lotNo
         const rawLot = line.lotNo || '0626';
-        const palletId = `PLT${rawLot}`;
+        const palletId = line.palletNo || `PLT${rawLot}`;
 
         // Dimensions parsing
         const thickness = line.thicknessLabel || (line.thicknessMm ? `${line.thicknessMm} mm` : '18 mm');
@@ -139,13 +139,22 @@ export default function LabelPrintTemplate({ docData, lineId }) {
               </div>
 
               {/* QR Section */}
-              <div className="flex flex-col items-center py-2 px-3 border-b-2 border-slate-900 bg-white">
+              <div className="flex flex-col items-center py-2 px-3 border-b-2 border-slate-900 bg-white min-h-[120px] justify-center">
                 <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">LOCATION QR CODE</div>
-                <img
-                  src={`/api/auth/qrcode/${encodeURIComponent(locCode)}`}
-                  alt="Location QR"
-                  className="w-[90px] h-[90px]"
-                />
+                {line.locationCode ? (
+                  <img
+                    src={`/api/auth/qrcode/${encodeURIComponent(locCode)}`}
+                    alt="Location QR"
+                    className="w-[90px] h-[90px]"
+                  />
+                ) : (
+                  <div className="w-[90px] h-[90px] border border-dashed border-slate-300 rounded flex flex-col justify-center items-center text-center text-[9px] font-bold text-amber-600 bg-amber-50 px-1">
+                    <svg className="w-5 h-5 text-amber-500 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <span>รอสแกนจัดเก็บ<br/>(Putaway)</span>
+                  </div>
+                )}
               </div>
 
               {/* Footer */}
@@ -170,7 +179,7 @@ export default function LabelPrintTemplate({ docData, lineId }) {
             {/* 2. PALLET LABEL */}
             <div
               className="bg-white border-2 border-slate-900 rounded-lg overflow-hidden flex flex-col font-sans shadow-sm"
-              style={{ width: '315px', height: '550px' }}
+              style={{ width: '350px', height: '550px' }}
             >
               {/* Header */}
               <div className="bg-slate-900 text-white text-center font-bold text-[12px] py-2 tracking-wider">
