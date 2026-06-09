@@ -34,12 +34,29 @@ export function UserProvider({ children }) {
     return data.data;
   };
 
+  const createRole = async (payload) => {
+    const data = await ApiClient.post('/api/accounts/roles', payload, { headers: authHeaders });
+    return data.data;
+  };
+
+  const updateRole = async (id, payload) => {
+    const data = await ApiClient.put(`/api/accounts/roles/${id}`, payload, { headers: authHeaders });
+    return data.data;
+  };
+
+  const deleteRole = async (id) => {
+    await ApiClient.delete(`/api/accounts/roles/${id}`, { headers: authHeaders });
+  };
+
   const value = useMemo(() => ({
     getUsers,
     createUser,
     updateUser,
     deleteUsers,
-    getRoles
+    getRoles,
+    createRole,
+    updateRole,
+    deleteRole,
   }), [authHeaders]);
 
   return (

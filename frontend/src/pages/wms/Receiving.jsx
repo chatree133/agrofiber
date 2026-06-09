@@ -3,11 +3,16 @@ import { Button, Card, Col, Form, Input, InputNumber, Modal, Row, Select, Space,
 import { AppstoreOutlined, ArrowRightOutlined, CheckCircleOutlined, FileExcelFilled, InfoCircleOutlined, PlayCircleOutlined, SearchOutlined, ScanOutlined } from '@ant-design/icons';
 import { useWms } from '../../context/WmsContext.jsx';
 import { Scanner } from '@yudiel/react-qr-scanner';
+import { useAuth } from '../../context/AuthContext.jsx';
 
 const { Title, Text } = Typography;
 
 export default function Receiving() {
-  const { getWmsTasks, confirmWmsTask, getWarehouseLocations, getWmsTaskDetail, getLastLocation } = useWms();
+  const { user } = useAuth();
+  const currentUserId = user?.id;
+  const roles = user?.roles || [];
+  const canForceUnclaim = roles.includes('admin') || roles.includes('warehouse_manager');
+  const { getWmsTasks, claimWmsTask, unclaimWmsTask, confirmWmsTask, getWarehouseLocations, getWmsTaskDetail, getLastLocation } = useWms();
 
   const [tasks, setTasks] = useState([]);
   const [taskPage, setTaskPage] = useState(1);
@@ -67,12 +72,20 @@ export default function Receiving() {
     if (isModalVisible && selectedTask && selectedTask.lines && selectedTask.lines.length > 0) {
       const firstLineId = selectedTask.lines[0].id;
       setTimeout(() => {
-        if (palletRefs.current[firstLineId]) {
-          palletRefs.current[firstLineId].focus();
+        if (selectRefs.current[firstLineId] && typeof selectRefs.current[firstLineId].focus === 'function') {
+          selectRefs.current[firstLineId].focus();
         }
       }, 150);
     }
   }, [isModalVisible, selectedTask]);
+
+  useEffect(() => {
+    if (!isModalVisible) {
+      selectRefs.current = {};
+      palletRefs.current = {};
+      cardRefs.current = {};
+    }
+  }, [isModalVisible]);
 
   const loadLocations = async (warehouseId) => {
     setLoadingLocs(true);
@@ -87,6 +100,18 @@ export default function Receiving() {
   };
 
   const handleOpenConfirm = async (task) => {
+    if (task?.actionBy && currentUserId && task.actionBy !== currentUserId) {
+      message.error(`งานนี้กำลังถูกดำเนินการโดย ${task.actionByName || 'ผู้ใช้อื่น'} อยู่แล้ว`);
+      return;
+    }
+
+    try {
+      await claimWmsTask(task.id);
+    } catch (err) {
+      message.error('ไม่สามารถเริ่มดำเนินการใบงานนี้ได้: ' + err.message);
+      return;
+    }
+
     setSelectedTask(task);
     await loadLocations(task.warehouseId);
 
@@ -134,6 +159,18 @@ export default function Receiving() {
     }
   };
 
+  const handleUnclaimTask = async (taskId) => {
+    try {
+      await unclaimWmsTask(taskId);
+      message.success('ยกเลิกการดำเนินการใบงานเรียบร้อยแล้ว');
+      setIsModalVisible(false);
+      setSelectedTask(null);
+      await fetchTasks();
+    } catch (err) {
+      message.error('ไม่สามารถยกเลิกการดำเนินการใบงานได้: ' + err.message);
+    }
+  };
+
   const handleLineInputChange = (lineId, field, value) => {
     setLineInputs(prev => ({
       ...prev,
@@ -144,12 +181,36 @@ export default function Receiving() {
     }));
   };
 
-  // Focus and scroll to next line's pallet input
-  const focusNextLine = (currentLineId) => {
+  const focusLineField = (lineId, field) => {
+    if (field === 'location') {
+      const ref = selectRefs.current[lineId];
+      if (ref && typeof ref.focus === 'function') {
+        ref.focus();
+      }
+      return;
+    }
+
+    if (field === 'pallet') {
+      const ref = palletRefs.current[lineId];
+      if (ref && typeof ref.focus === 'function') {
+        ref.focus();
+      }
+    }
+  };
+
+  // Focus flow: from location -> pallet in same row; from pallet -> next row location
+  const focusNextLine = (currentLineId, fromField = 'location') => {
     if (!selectedTask || !selectedTask.lines) return;
     const lines = selectedTask.lines;
     const idx = lines.findIndex(l => l.id === currentLineId);
     if (idx === -1) return;
+
+    if (fromField === 'location') {
+      // Same row: move from location select to pallet input after dropdown close
+      setTimeout(() => focusLineField(currentLineId, 'pallet'), 60);
+      return;
+    }
+
     const next = lines[idx + 1];
     if (!next) return;
     const nextId = next.id;
@@ -160,17 +221,15 @@ export default function Receiving() {
       if (el && typeof el.scrollIntoView === 'function') {
         el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
       } else if (modalContentRef.current && el) {
-        // fallback: adjust container scrollTop
         modalContentRef.current.scrollTop = el.offsetTop - 24;
       }
     } catch (err) {
       // ignore
     }
 
-    // Focus the pallet input after a short delay to allow scrolling to finish
     setTimeout(() => {
       try {
-        palletRefs.current[nextId] && palletRefs.current[nextId].focus && palletRefs.current[nextId].focus();
+        focusLineField(nextId, 'location');
       } catch (err) {
         // ignore
       }
@@ -284,6 +343,16 @@ export default function Receiving() {
       render: (text) => <span className="text-slate-600">{text}</span>,
     },
     {
+      title: 'ผู้ดำเนินการ',
+      key: 'actionBy',
+      render: (_, r) => (
+        <span className="text-slate-600">
+          {r.actionByName || '-'}
+          {r.actionAt ? ` (${new Date(r.actionAt).toLocaleString('th-TH')})` : ''}
+        </span>
+      ),
+    },
+    {
       title: 'วันที่มอบหมาย',
       dataIndex: 'createdAt',
       key: 'createdAt',
@@ -292,17 +361,30 @@ export default function Receiving() {
     {
       fixed: 'right',
       title: 'การจัดการ',
+      width: 250,
       key: 'action',
       render: (_, r) => (
-        <Button
-          size='small'
-          type="primary"
-          icon={<PlayCircleOutlined />}
-          onClick={() => handleOpenConfirm(r)}
-          className="bg-indigo-600 hover:bg-indigo-700 border-none shadow-sm rounded-md"
-        >
-          ดำเนินการจัดเก็บ
-        </Button>
+        <Space>
+          <Button
+            size='small'
+            type="primary"
+            icon={<PlayCircleOutlined />}
+            onClick={() => handleOpenConfirm(r)}
+            disabled={Boolean(r.actionBy && currentUserId && r.actionBy !== currentUserId)}
+            className="bg-indigo-600 hover:bg-indigo-700 border-none shadow-sm rounded-md"
+          >
+            ดำเนินการจัดเก็บ
+          </Button>
+          {r.actionBy && (r.actionBy === currentUserId || canForceUnclaim) ? (
+            <Button
+              size="small"
+              danger
+              onClick={() => handleUnclaimTask(r.id)}
+            >
+              Unclaim
+            </Button>
+          ) : null}
+        </Space>
       ),
     },
   ];
@@ -343,14 +425,14 @@ export default function Receiving() {
           dataSource={tasks.slice((taskPage - 1) * pageSize, taskPage * pageSize).map(t => ({ ...t, key: t.id }))}
           loading={loading && !isModalVisible}
           pagination={false}
-          scroll={{ x: 900 }}
+          scroll={{ x: 1200 }}
           locale={{ emptyText: 'ไม่พบรายการงานรับเข้าที่รอจัดเก็บ' }}
           className="rounded-lg overflow-hidden border border-slate-50 border-t-0"
         />
       </Card>
 
       {/* Putaway Confirmation Modal */}
-      <Modal
+	      <Modal
         title={
           <div className="border-b border-slate-100 pb-3 flex items-center gap-2">
             <AppstoreOutlined className="text-indigo-600 text-lg" />
@@ -359,20 +441,39 @@ export default function Receiving() {
             </span>
           </div>
         }
-        open={isModalVisible}
-        onCancel={() => setIsModalVisible(false)}
-        onOk={handleConfirmPutaway}
-        confirmLoading={confirmLoading}
-        width={950}
-        okText="ยืนยันจัดเก็บเข้าคลังทั้งหมด"
-        cancelText="ยกเลิก"
+	        open={isModalVisible}
+	        onCancel={() => setIsModalVisible(false)}
+	        confirmLoading={confirmLoading}
+	        width={950}
+	        okText="ยืนยันจัดเก็บเข้าคลังทั้งหมด"
+	        cancelText="ยกเลิก"
         okButtonProps={{
           className: "bg-indigo-600 hover:bg-indigo-700 border-none px-5 rounded-md",
         }}
-        cancelButtonProps={{
-          className: "rounded-md",
-        }}
-      >
+	        cancelButtonProps={{
+	          className: "rounded-md",
+	        }}
+          footer={
+            <Space className="w-full justify-end">
+              <Button onClick={() => setIsModalVisible(false)}>
+                ยกเลิก
+              </Button>
+              {selectedTask?.actionBy && (selectedTask.actionBy === currentUserId || canForceUnclaim) ? (
+                <Button danger onClick={() => handleUnclaimTask(selectedTask.id)} disabled={confirmLoading}>
+                  Unclaim
+                </Button>
+              ) : null}
+              <Button
+                type="primary"
+                onClick={handleConfirmPutaway}
+                loading={confirmLoading}
+                className="bg-indigo-600 hover:bg-indigo-700 border-none px-5 rounded-md"
+              >
+                ยืนยันจัดเก็บเข้าคลังทั้งหมด
+              </Button>
+            </Space>
+          }
+	      >
         <div ref={modalContentRef} className="py-4 flex flex-col gap-4 max-h-[60vh] overflow-y-auto pr-1">
           <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 flex flex-col md:flex-row justify-between gap-3 text-sm">
             <div>
@@ -427,48 +528,6 @@ export default function Receiving() {
                   {/* WMS Input & Selection Row */}
                   <Col xs={24}>
                     <Row gutter={[16, 16]}>
-                      {/* Pallet ID Group */}
-                      <Col xs={24} md={12}>
-                        <Row gutter={8}>
-                          <Col span={10}>
-                            <span className="text-xs font-semibold text-slate-400 block mb-1">หมายเลขพาเลทแนะนำ</span>
-                            <Input
-                              value={line.palletNo || `PLT${line.lotNo || ''}`}
-                              readOnly
-                              disabled
-                              className="rounded-md bg-slate-50 border-slate-200 text-slate-500"
-                            />
-                          </Col>
-                          <Col span={14}>
-                            <span className="text-xs font-semibold text-slate-500 block mb-1">
-                              <span className="text-red-500 mr-1">*</span>หมายเลขพาเลทจริง
-                            </span>
-                            <div className="flex gap-1">
-                              <Input
-                                ref={(el) => { palletRefs.current[line.id] = el; }}
-                                placeholder="ระบุพาเลทปลายทาง"
-                                value={lineInput.palletId}
-                                onChange={(e) => handleLineInputChange(line.id, 'palletId', e.target.value)}
-                                onPressEnter={() => {
-                                  if (selectRefs.current[line.id]) {
-                                    selectRefs.current[line.id].focus();
-                                  }
-                                }}
-                                className={`rounded-md text-xs transition-all ${lineInput.palletId && String(lineInput.palletId || '').trim() === String(line.palletNo || `PLT${line.lotNo || ''}`).trim()
-                                  ? 'border-emerald-500 bg-emerald-50/10 text-emerald-700 font-semibold'
-                                  : 'border-slate-300'
-                                  }`}
-                              />
-                              <Button
-                                icon={<ScanOutlined />}
-                                onClick={() => handleOpenScanner('pallet', line.id)}
-                                className="border-slate-300 hover:border-indigo-500 hover:text-indigo-500"
-                              />
-                            </div>
-                          </Col>
-                        </Row>
-                      </Col>
-
                       {/* Location Group */}
                       <Col xs={24} md={12}>
                         <Row gutter={8}>
@@ -489,8 +548,7 @@ export default function Receiving() {
                                   className="rounded-md bg-amber-50/50 border-amber-300 text-amber-700 font-semibold cursor-pointer text-xs"
                                   onClick={() => {
                                     handleLineInputChange(line.id, 'toLocationId', lastLocations[line.id].locationId);
-                                    // Advance to next row after choosing suggested location
-                                    focusNextLine(line.id);
+                                    setTimeout(() => focusNextLine(line.id, 'location'), 60);
                                   }}
                                 />
                               </Tooltip>
@@ -515,12 +573,12 @@ export default function Receiving() {
                                 value={lineInput.toLocationId}
                                 onChange={(val) => {
                                   handleLineInputChange(line.id, 'toLocationId', val);
-                                  // After selecting a location, advance to next row's pallet input
-                                  focusNextLine(line.id);
+                                  setTimeout(() => focusNextLine(line.id, 'location'), 60);
                                 }}
                                 onKeyDown={(e) => {
                                   if (e.key === 'Enter') {
-                                    focusNextLine(line.id);
+                                    e.preventDefault();
+                                    setTimeout(() => focusNextLine(line.id, 'location'), 60);
                                   }
                                 }}
                                 loading={loadingLocs}
@@ -541,6 +599,44 @@ export default function Receiving() {
                               <Button
                                 icon={<ScanOutlined />}
                                 onClick={() => handleOpenScanner('location', line.id)}
+                                className="border-slate-300 hover:border-indigo-500 hover:text-indigo-500"
+                              />
+                            </div>
+                          </Col>
+                        </Row>
+                      </Col>
+
+                      {/* Pallet ID Group */}
+                      <Col xs={24} md={12}>
+                        <Row gutter={8}>
+                          <Col span={10}>
+                            <span className="text-xs font-semibold text-slate-400 block mb-1">หมายเลขพาเลทแนะนำ</span>
+                            <Input
+                              value={line.palletNo || `PLT${line.lotNo || ''}`}
+                              readOnly
+                              disabled
+                              className="rounded-md bg-slate-50 border-slate-200 text-slate-500"
+                            />
+                          </Col>
+                          <Col span={14}>
+                            <span className="text-xs font-semibold text-slate-500 block mb-1">
+                              <span className="text-red-500 mr-1">*</span>หมายเลขพาเลทจริง
+                            </span>
+                            <div className="flex gap-1">
+                              <Input
+                                ref={(el) => { palletRefs.current[line.id] = el; }}
+                                placeholder="ระบุพาเลทปลายทาง"
+                                value={lineInput.palletId}
+                                onChange={(e) => handleLineInputChange(line.id, 'palletId', e.target.value)}
+                                onPressEnter={() => setTimeout(() => focusNextLine(line.id, 'pallet'), 60)}
+                                className={`rounded-md text-xs transition-all ${lineInput.palletId && String(lineInput.palletId || '').trim() === String(line.palletNo || `PLT${line.lotNo || ''}`).trim()
+                                  ? 'border-emerald-500 bg-emerald-50/10 text-emerald-700 font-semibold'
+                                  : 'border-slate-300'
+                                  }`}
+                              />
+                              <Button
+                                icon={<ScanOutlined />}
+                                onClick={() => handleOpenScanner('pallet', line.id)}
                                 className="border-slate-300 hover:border-indigo-500 hover:text-indigo-500"
                               />
                             </div>
@@ -577,7 +673,7 @@ export default function Receiving() {
                     handleLineInputChange(scannedLineId, 'toLocationId', matchedLoc.value);
                     message.success(`สแกนตำแหน่งสำเร็จ: ${matchedLoc.label}`);
                     setScannerOpen(false);
-                    focusNextLine(scannedLineId);
+                    setTimeout(() => focusNextLine(scannedLineId, 'location'), 60);
                   } else {
                     message.error(`ไม่พบรหัสตำแหน่ง "${cleanedText}" ในคลังสินค้านี้!`);
                   }

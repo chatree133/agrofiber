@@ -165,23 +165,33 @@ export const appMenus = [
         key: "/wms",
         icon: <AppstoreOutlined />,
         label: "WMS",
-        allowedRoles: ["admin", "user"],
+        allowedRoles: ["admin", "user", "warehouse", "warehouse_manager"],
         children: [
+            {
+                key: "/wms/dashboard",
+                label: "Dashboard",
+                allowedRoles: ["admin", "warehouse", "warehouse_manager"],
+            },
             {
                 key: "/wms/receiving",
                 label: "รับสินค้าเข้าคลัง",
-                allowedRoles: ["admin", "user"],
+                allowedRoles: ["admin", "user", "warehouse", "warehouse_manager"],
             },
             {
                 key: "/wms/picking",
                 label: "หยิบสินค้า",
-                allowedRoles: ["admin", "user"],
+                allowedRoles: ["admin", "user", "warehouse", "warehouse_manager"],
             },
             {
-                key: "/wms/packing",
-                label: "แพ็คสินค้า",
-                allowedRoles: ["admin", "user"],
+                key: "/wms/transfers",
+                label: "โอนย้ายสินค้า (สแกน)",
+                allowedRoles: ["admin", "warehouse", "warehouse_manager"],
             },
+            // {
+            //     key: "/wms/packing",
+            //     label: "แพ็คสินค้า",
+            //     allowedRoles: ["admin", "user"],
+            // },
         ],
     },
     {
@@ -304,6 +314,11 @@ export const appMenus = [
                 label: "เลขที่เอกสาร",
                 allowedRoles: ["admin"],
             },
+            {
+                key: "/settings/smtp",
+                label: "SMTP",
+                allowedRoles: ["admin"],
+            },
         ],
     },
     {
@@ -324,7 +339,7 @@ export const appMenus = [
 
 export function flattenMenus(items = appMenus) {
     return items
-        .filter(item => !item.hiddenInMenu)
+        .filter((item) => !item.hiddenInMenu)
         .flatMap((item) => [item, ...(item.children || [])]);
 }
 

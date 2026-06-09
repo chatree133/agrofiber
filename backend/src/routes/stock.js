@@ -172,6 +172,10 @@ function buildMovementFilters(query) {
     conditions.push('sm.ItemId = @itemId');
     inputs.itemId = { type: sql.Int, value: parseId(query.itemId, 'itemId') };
   }
+  if (query.itemSpecId) {
+    conditions.push('sm.ItemSpecId = @itemSpecId');
+    inputs.itemSpecId = { type: sql.Int, value: parseId(query.itemSpecId, 'itemSpecId') };
+  }
   if (query.warehouseId) {
     const warehouseId = parseId(query.warehouseId, 'warehouseId');
     conditions.push('(sm.FromWarehouseId = @warehouseId OR sm.ToWarehouseId = @warehouseId)');

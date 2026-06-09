@@ -7,14 +7,19 @@ import { wmsTaskService } from '../services/wms/wmsTaskService.js';
 const router = Router();
 router.use(authenticate);
 
-const readRoles = allowRoles('admin', 'user', 'audit', 'warehouse');
-const writeRoles = allowRoles('admin', 'warehouse');
+const readRoles = allowRoles('admin', 'user', 'audit', 'warehouse', 'warehouse_manager');
+const writeRoles = allowRoles('admin', 'warehouse', 'warehouse_manager');
 
 function getUserId(req) {
   const raw = req.user?.sub;
   const userId = Number(raw);
   if (!Number.isInteger(userId) || userId <= 0) throw new Error('Invalid authenticated user');
   return userId;
+}
+
+function isWmsPrivileged(req) {
+  const roles = req.user?.roles || [];
+  return roles.includes('admin') || roles.includes('warehouse_manager');
 }
 
 // Get last putaway location of an item
@@ -54,6 +59,25 @@ router.get('/tasks/:id', readRoles, asyncHandler(async (req, res) => {
   res.json({ data: task });
 }));
 
+// Claim/Start a task (set ActionBy = current user)
+router.post('/tasks/:id/claim', writeRoles, asyncHandler(async (req, res) => {
+  const taskId = Number(req.params.id);
+  const userId = getUserId(req);
+  await wmsTaskService.claimTask({ taskId, userId });
+  const updatedTask = await wmsTaskService.getTaskById(taskId);
+  res.json({ data: updatedTask });
+}));
+
+// Unclaim/Stop a task (clear ActionBy/ActionAt)
+router.post('/tasks/:id/unclaim', writeRoles, asyncHandler(async (req, res) => {
+  const taskId = Number(req.params.id);
+  const userId = getUserId(req);
+  const privileged = isWmsPrivileged(req);
+  await wmsTaskService.unclaimTask({ taskId, userId, privileged });
+  const updatedTask = await wmsTaskService.getTaskById(taskId);
+  res.json({ data: updatedTask });
+}));
+
 // Create a wave picking task group
 router.post('/waves', writeRoles, asyncHandler(async (req, res) => {
   const userId = getUserId(req);
@@ -77,6 +101,25 @@ router.get('/waves/:id', readRoles, asyncHandler(async (req, res) => {
     return res.status(404).json({ message: 'WMS Wave not found' });
   }
   res.json({ data: wave });
+}));
+
+// Claim/Start a wave (set ActionBy = current user)
+router.post('/waves/:id/claim', writeRoles, asyncHandler(async (req, res) => {
+  const waveId = Number(req.params.id);
+  const userId = getUserId(req);
+  await wmsTaskService.claimWave({ waveId, userId });
+  const updatedWave = await wmsTaskService.getWaveById(waveId);
+  res.json({ data: updatedWave });
+}));
+
+// Unclaim/Stop a wave (clear ActionBy/ActionAt; also clears open tasks ActionBy under the wave)
+router.post('/waves/:id/unclaim', writeRoles, asyncHandler(async (req, res) => {
+  const waveId = Number(req.params.id);
+  const userId = getUserId(req);
+  const privileged = isWmsPrivileged(req);
+  await wmsTaskService.unclaimWave({ waveId, userId, privileged });
+  const updatedWave = await wmsTaskService.getWaveById(waveId);
+  res.json({ data: updatedWave });
 }));
 
 // Confirm picking task

@@ -9,7 +9,7 @@ const router = Router();
 router.use(authenticate);
 
 const writeRoles = allowRoles('admin', 'accounting', 'user');
-const readRoles = allowRoles('admin', 'accounting', 'user', 'audit');
+const readRoles = allowRoles('admin', 'accounting', 'user', 'audit', 'warehouse', 'warehouse_manager');
 
 router.get(
   '/',

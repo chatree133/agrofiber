@@ -51,6 +51,20 @@ function mapDocumentSeries(row) {
   };
 }
 
+function mapSmtpSettings(row) {
+  return {
+    smtpSettingId: row.SmtpSettingId,
+    smtpHost: row.SmtpHost,
+    smtpPort: row.SmtpPort,
+    smtpUser: row.SmtpUser,
+    smtpPassword: row.SmtpPassword,
+    smtpSender: row.SmtpSender,
+    isActive: Boolean(row.IsActive),
+    createdAt: row.CreatedAt,
+    updatedAt: row.UpdatedAt,
+  };
+}
+
 router.get(
   '/document-series',
   asyncHandler(async (req, res) => {
@@ -237,6 +251,179 @@ router.delete(
     }
 
     res.json({ message: 'Document series deactivated', data: mapDocumentSeries(rows[0]) });
+  }),
+);
+
+router.get(
+  '/smtp-settings',
+  asyncHandler(async (req, res) => {
+    const rows = await mssqlQuery('DEFAULT', `
+      SELECT *
+      FROM dbo.SmtpSettings
+      ORDER BY SmtpSettingId DESC
+    `);
+
+    res.json({
+      data: rows.map(mapSmtpSettings),
+    });
+  }),
+);
+
+router.get(
+  '/smtp-settings/:id',
+  asyncHandler(async (req, res) => {
+    const rows = await mssqlQuery('DEFAULT', `
+      SELECT *
+      FROM dbo.SmtpSettings
+      WHERE SmtpSettingId = @id
+    `, {
+      inputs: {
+        id: { type: sql.Int, value: Number(req.params.id) },
+      },
+    });
+
+    if (!rows.length) {
+      return res.status(404).json({ message: 'SMTP settings not found' });
+    }
+
+    res.json({ data: mapSmtpSettings(rows[0]) });
+  }),
+);
+
+router.post(
+  '/smtp-settings',
+  asyncHandler(async (req, res) => {
+    const {
+      smtpHost,
+      smtpPort = 587,
+      smtpUser,
+      smtpPassword,
+      smtpSender,
+      isActive = true,
+    } = req.body;
+
+    if (!smtpHost || !smtpUser || !smtpPassword || !smtpSender) {
+      return res.status(400).json({
+        message: 'smtpHost, smtpUser, smtpPassword, and smtpSender are required',
+      });
+    }
+
+    const rows = await mssqlQuery('DEFAULT', `
+      INSERT INTO dbo.SmtpSettings (
+        SmtpHost,
+        SmtpPort,
+        SmtpUser,
+        SmtpPassword,
+        SmtpSender,
+        IsActive
+      )
+      OUTPUT inserted.*
+      VALUES (
+        @smtpHost,
+        @smtpPort,
+        @smtpUser,
+        @smtpPassword,
+        @smtpSender,
+        @isActive
+      )
+    `, {
+      inputs: {
+        smtpHost: { type: sql.NVarChar(255), value: smtpHost },
+        smtpPort: { type: sql.Int, value: Number(smtpPort) },
+        smtpUser: { type: sql.NVarChar(255), value: smtpUser },
+        smtpPassword: { type: sql.NVarChar(255), value: smtpPassword },
+        smtpSender: { type: sql.NVarChar(255), value: smtpSender },
+        isActive: { type: sql.Bit, value: Boolean(isActive) },
+      },
+    });
+
+    res.status(201).json({ data: mapSmtpSettings(rows[0]) });
+  }),
+);
+
+router.put(
+  '/smtp-settings/:id',
+  asyncHandler(async (req, res) => {
+    const updates = [];
+    const inputs = {
+      id: { type: sql.Int, value: Number(req.params.id) },
+    };
+
+    const {
+      smtpHost,
+      smtpPort,
+      smtpUser,
+      smtpPassword,
+      smtpSender,
+      isActive,
+    } = req.body;
+
+    if (smtpHost !== undefined) {
+      updates.push('SmtpHost = @smtpHost');
+      inputs.smtpHost = { type: sql.NVarChar(255), value: smtpHost };
+    }
+    if (smtpPort !== undefined) {
+      updates.push('SmtpPort = @smtpPort');
+      inputs.smtpPort = { type: sql.Int, value: Number(smtpPort) };
+    }
+    if (smtpUser !== undefined) {
+      updates.push('SmtpUser = @smtpUser');
+      inputs.smtpUser = { type: sql.NVarChar(255), value: smtpUser };
+    }
+    if (smtpPassword !== undefined) {
+      updates.push('SmtpPassword = @smtpPassword');
+      inputs.smtpPassword = { type: sql.NVarChar(255), value: smtpPassword };
+    }
+    if (smtpSender !== undefined) {
+      updates.push('SmtpSender = @smtpSender');
+      inputs.smtpSender = { type: sql.NVarChar(255), value: smtpSender };
+    }
+    if (isActive !== undefined) {
+      updates.push('IsActive = @isActive');
+      inputs.isActive = { type: sql.Bit, value: Boolean(isActive) };
+    }
+    if (updates.length === 0) {
+      updates.push('UpdatedAt = @updatedAt');
+      inputs.updatedAt = { type: sql.DateTime2, value: new Date() };
+    } else {
+      updates.push('UpdatedAt = @updatedAt');
+      inputs.updatedAt = { type: sql.DateTime2, value: new Date() };
+    }
+
+    const rows = await mssqlQuery('DEFAULT', `
+      UPDATE dbo.SmtpSettings
+      SET ${updates.join(', ')}
+      OUTPUT inserted.*
+      WHERE SmtpSettingId = @id
+    `, { inputs });
+
+    if (!rows.length) {
+      return res.status(404).json({ message: 'SMTP settings not found' });
+    }
+
+    res.json({ data: mapSmtpSettings(rows[0]) });
+  }),
+);
+
+router.delete(
+  '/smtp-settings/:id',
+  asyncHandler(async (req, res) => {
+    const rows = await mssqlQuery('DEFAULT', `
+      UPDATE dbo.SmtpSettings
+      SET IsActive = 0, UpdatedAt = SYSUTCDATETIME()
+      OUTPUT inserted.*
+      WHERE SmtpSettingId = @id
+    `, {
+      inputs: {
+        id: { type: sql.Int, value: Number(req.params.id) },
+      },
+    });
+
+    if (!rows.length) {
+      return res.status(404).json({ message: 'SMTP settings not found' });
+    }
+
+    res.json({ message: 'SMTP settings deactivated', data: mapSmtpSettings(rows[0]) });
   }),
 );
 

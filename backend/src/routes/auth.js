@@ -31,7 +31,7 @@ router.post(
           r.RoleCode,
           ufm.MenuKey
         FROM dbo.Users u
-        LEFT JOIN dbo.UserRoles ur ON ur.UserId = u.UserId
+        LEFT JOIN dbo.UserRoles ur ON ur.UserId = u.UserId AND ur.IsActive = 1
         LEFT JOIN dbo.Roles r ON r.RoleId = ur.RoleId
         LEFT JOIN dbo.UserFavoriteMenus ufm ON ufm.UserId = u.UserId
         WHERE u.Username = @login OR u.StaffId = @login

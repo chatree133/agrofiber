@@ -14,6 +14,118 @@ body {
   color: #374151;
 }
 
+.wms-dashboard {
+  background: radial-gradient(1200px 500px at 10% 0%, rgba(31, 134, 246, 0.18), transparent 60%),
+    radial-gradient(900px 450px at 95% 10%, rgba(34, 211, 238, 0.12), transparent 55%),
+    linear-gradient(180deg, #071d2c 0%, #071428 55%, #061124 100%);
+  border-radius: 14px;
+  padding: 14px;
+  color: #e5e7eb;
+}
+
+.wms-dashboard-text {
+  color: #e5e7eb !important;
+}
+
+.wms-dashboard-muted {
+  color: rgba(229, 231, 235, 0.72) !important;
+}
+
+.wms-dashboard-divider.ant-divider {
+  margin: 10px 0 !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+.wms-dashboard-card.ant-card {
+  background: rgba(9, 27, 43, 0.78) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35) !important;
+  color: #e5e7eb !important;
+}
+
+.wms-dashboard-card .ant-card-head {
+  background: transparent !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.wms-dashboard-card .ant-card-head-title {
+  color: #e5e7eb !important;
+  font-weight: 600;
+}
+
+.wms-dashboard-input.ant-input-affix-wrapper {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+}
+
+.wms-dashboard-input .ant-input {
+  background: transparent !important;
+  color: #e5e7eb !important;
+}
+
+.wms-dashboard-input .ant-input-prefix,
+.wms-dashboard-input .ant-input-clear-icon {
+  color: rgba(229, 231, 235, 0.7) !important;
+}
+
+.wms-dashboard-block {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.wms-dashboard-table .ant-table {
+  background: transparent !important;
+  color: #e5e7eb !important;
+}
+
+.wms-dashboard-table .ant-table-container {
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 10px;
+}
+
+.wms-dashboard-table .ant-table-thead > tr > th {
+  background: rgba(255, 255, 255, 0.04) !important;
+  color: rgba(229, 231, 235, 0.8) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.wms-dashboard-table .ant-table-tbody > tr > td {
+  background: transparent !important;
+  color: #e5e7eb !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+}
+
+.wms-dashboard-table .ant-table-tbody > tr.ant-table-row:hover > td {
+  background: rgba(31, 134, 246, 0.08) !important;
+}
+
+.wms-dashboard-row-active > td {
+  background: linear-gradient(90deg, rgba(31, 134, 246, 0.22), rgba(31, 134, 246, 0.08)) !important;
+  box-shadow: inset 3px 0 0 rgba(31, 134, 246, 0.95);
+}
+
+.wms-dashboard-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(31, 134, 246, 1);
+  box-shadow: 0 0 0 3px rgba(31, 134, 246, 0.2), 0 0 18px rgba(31, 134, 246, 0.55);
+  animation: wmsPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes wmsPulse {
+  0% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.12); opacity: 0.72; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.wms-dashboard-status.ant-tag {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
 .users-table-nowrap .ant-table-cell,
 .users-table-nowrap .ant-table-thead > tr > th {
   white-space: nowrap;

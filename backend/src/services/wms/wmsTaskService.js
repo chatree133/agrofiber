@@ -7,6 +7,12 @@ function badRequest(message) {
   return error;
 }
 
+function forbidden(message) {
+  const error = new Error(message);
+  error.status = 403;
+  return error;
+}
+
 export const wmsTaskService = {
   /**
    * สร้าง WMS Task ใหม่ (รองรับการรันภายใน Transaction หรือนอก Transaction)
@@ -110,12 +116,17 @@ export const wmsTaskService = {
     const rows = await mssqlQuery('DEFAULT', `
       SELECT 
         t.WmsTaskId, t.TaskType, ty.TaskTypeName, t.ReferenceType, t.ReferenceId,
-        t.WarehouseId, w.WarehouseName, t.AssignedTo, u.DisplayName,
-        t.Status, t.CreatedAt, t.CompletedAt
+        t.WarehouseId, w.WarehouseName,
+        t.AssignedTo, u.DisplayName AS AssignedToName,
+        t.ActionBy, ua.DisplayName AS ActionByName, ua.AvatarUrl AS ActionByAvatarUrl,
+        t.CompletedBy, uc.DisplayName AS CompletedByName,
+        t.Status, t.CreatedAt, t.ActionAt, t.CompletedAt
       FROM dbo.WmsTasks t
       LEFT JOIN dbo.WmsTaskTypes ty ON ty.TaskTypeCode = t.TaskType
       LEFT JOIN dbo.Warehouses w ON w.WarehouseId = t.WarehouseId
       LEFT JOIN dbo.Users u ON u.UserId = t.AssignedTo
+      LEFT JOIN dbo.Users ua ON ua.UserId = t.ActionBy
+      LEFT JOIN dbo.Users uc ON uc.UserId = t.CompletedBy
       WHERE ${whereClause}
       ORDER BY t.CreatedAt DESC
     `, { inputs });
@@ -129,10 +140,16 @@ export const wmsTaskService = {
       warehouseId: r.WarehouseId,
       warehouseName: r.WarehouseName,
       assignedTo: r.AssignedTo,
-      assignedToName: r.DisplayName || null,
+      assignedToName: r.AssignedToName || null,
+      actionBy: r.ActionBy ?? null,
+      actionByName: r.ActionByName || null,
+      actionByAvatarUrl: r.ActionByAvatarUrl || null,
       status: r.Status,
       createdAt: r.CreatedAt,
-      completedAt: r.CompletedAt
+      actionAt: r.ActionAt ?? null,
+      completedAt: r.CompletedAt,
+      completedBy: r.CompletedBy ?? null,
+      completedByName: r.CompletedByName || null
     }));
   },
 
@@ -140,9 +157,14 @@ export const wmsTaskService = {
     const headerRows = await mssqlQuery('DEFAULT', `
       SELECT 
         t.WmsTaskId, t.TaskType, ty.TaskTypeName, t.ReferenceType, t.ReferenceId,
-        t.WarehouseId, w.WarehouseName, t.AssignedTo, u.DisplayName,
-        t.Status, t.CreatedAt, t.CompletedAt, t.WaveId
+        t.WarehouseId, w.WarehouseName,
+        t.AssignedTo, u.DisplayName AS AssignedToName,
+        t.ActionBy, ua.DisplayName AS ActionByName, ua.AvatarUrl AS ActionByAvatarUrl,
+        t.CompletedBy, uc.DisplayName AS CompletedByName,
+        t.Status, t.CreatedAt, t.ActionAt, t.CompletedAt, t.WaveId
       FROM dbo.WmsTasks t
+      LEFT JOIN dbo.Users uc ON uc.UserId = t.CompletedBy
+      LEFT JOIN dbo.Users ua ON ua.UserId = t.ActionBy
       LEFT JOIN dbo.WmsTaskTypes ty ON ty.TaskTypeCode = t.TaskType
       LEFT JOIN dbo.Warehouses w ON w.WarehouseId = t.WarehouseId
       LEFT JOIN dbo.Users u ON u.UserId = t.AssignedTo
@@ -179,10 +201,16 @@ export const wmsTaskService = {
       warehouseId: task.WarehouseId,
       warehouseName: task.WarehouseName,
       assignedTo: task.AssignedTo,
-      assignedToName: task.DisplayName || null,
+      assignedToName: task.AssignedToName || null,
+      actionBy: task.ActionBy ?? null,
+      actionByName: task.ActionByName || null,
+      actionByAvatarUrl: task.ActionByAvatarUrl || null,
       status: task.Status,
       createdAt: task.CreatedAt,
+      actionAt: task.ActionAt ?? null,
       completedAt: task.CompletedAt,
+      completedBy: task.CompletedBy ?? null,
+      completedByName: task.CompletedByName || null,
       waveId: task.WaveId,
       lines: linesRows.map(l => ({
         id: l.WmsTaskLineId,
@@ -207,6 +235,68 @@ export const wmsTaskService = {
         palletNo: l.PalletNo
       }))
     };
+  },
+
+  async claimTask({ taskId, userId }, existingTx = null) {
+    const execute = async (tx) => {
+      const req = new sql.Request(tx);
+      req.input('taskId', sql.BigInt, taskId);
+      const res = await req.query(`
+        SELECT WmsTaskId, Status, ActionBy
+        FROM dbo.WmsTasks
+        WHERE WmsTaskId = @taskId
+      `);
+      const task = res.recordset[0];
+      if (!task) throw badRequest('WMS Task not found');
+      if (task.Status === 'completed') throw badRequest('WMS Task is already completed');
+      if (task.ActionBy && task.ActionBy !== userId) throw badRequest('WMS Task is being handled by another user');
+
+      const upd = new sql.Request(tx);
+      upd.input('taskId', sql.BigInt, taskId);
+      upd.input('userId', sql.Int, userId);
+      await upd.query(`
+        UPDATE dbo.WmsTasks
+        SET
+          ActionBy = @userId,
+          ActionAt = COALESCE(ActionAt, SYSUTCDATETIME()),
+          AssignedTo = COALESCE(AssignedTo, @userId)
+        WHERE WmsTaskId = @taskId
+      `);
+      return { success: true };
+    };
+
+    if (existingTx) return await execute(existingTx);
+    return await mssqlTransaction('DEFAULT', execute);
+  },
+
+  async unclaimTask({ taskId, userId, privileged = false }, existingTx = null) {
+    const execute = async (tx) => {
+      const req = new sql.Request(tx);
+      req.input('taskId', sql.BigInt, taskId);
+      const res = await req.query(`
+        SELECT WmsTaskId, Status, ActionBy
+        FROM dbo.WmsTasks
+        WHERE WmsTaskId = @taskId
+      `);
+      const task = res.recordset[0];
+      if (!task) throw badRequest('WMS Task not found');
+      if (task.Status === 'completed') throw badRequest('WMS Task is already completed');
+
+      if (!task.ActionBy) return { success: true };
+      if (task.ActionBy !== userId && !privileged) throw forbidden('Forbidden: cannot unclaim task owned by another user');
+
+      const upd = new sql.Request(tx);
+      upd.input('taskId', sql.BigInt, taskId);
+      await upd.query(`
+        UPDATE dbo.WmsTasks
+        SET ActionBy = NULL, ActionAt = NULL
+        WHERE WmsTaskId = @taskId
+      `);
+      return { success: true };
+    };
+
+    if (existingTx) return await execute(existingTx);
+    return await mssqlTransaction('DEFAULT', execute);
   },
 
   async createWave({ taskIds, userId }, existingTx = null) {
@@ -265,11 +355,15 @@ export const wmsTaskService = {
 
     const rows = await mssqlQuery('DEFAULT', `
       SELECT 
-        w.WmsWaveId, w.WaveNo, w.Status, w.CreatedBy, w.CreatedAt, w.CompletedAt,
+        w.WmsWaveId, w.WaveNo, w.Status, w.CreatedBy, w.CreatedAt,
+        w.ActionBy, w.ActionAt,
+        w.CompletedAt,
         u.DisplayName AS CreatedByName,
+        ua.DisplayName AS ActionByName, ua.AvatarUrl AS ActionByAvatarUrl,
         (SELECT COUNT(1) FROM dbo.WmsTasks t WHERE t.WaveId = w.WmsWaveId) AS TaskCount
       FROM dbo.WmsWaves w
       LEFT JOIN dbo.Users u ON u.UserId = w.CreatedBy
+      LEFT JOIN dbo.Users ua ON ua.UserId = w.ActionBy
       WHERE ${whereClause}
       ORDER BY w.CreatedAt DESC
     `, { inputs });
@@ -281,6 +375,10 @@ export const wmsTaskService = {
       createdBy: r.CreatedBy,
       createdByName: r.CreatedByName,
       createdAt: r.CreatedAt,
+      actionBy: r.ActionBy ?? null,
+      actionByName: r.ActionByName || null,
+      actionByAvatarUrl: r.ActionByAvatarUrl || null,
+      actionAt: r.ActionAt ?? null,
       completedAt: r.CompletedAt,
       taskCount: r.TaskCount
     }));
@@ -288,10 +386,14 @@ export const wmsTaskService = {
 
   async getWaveById(waveId) {
     const waveRows = await mssqlQuery('DEFAULT', `
-      SELECT w.WmsWaveId, w.WaveNo, w.Status, w.CreatedBy, w.CreatedAt, w.CompletedAt,
-             u.DisplayName AS CreatedByName
+      SELECT w.WmsWaveId, w.WaveNo, w.Status, w.CreatedBy, w.CreatedAt,
+             w.ActionBy, w.ActionAt,
+             w.CompletedAt,
+             u.DisplayName AS CreatedByName,
+             ua.DisplayName AS ActionByName, ua.AvatarUrl AS ActionByAvatarUrl
       FROM dbo.WmsWaves w
       LEFT JOIN dbo.Users u ON u.UserId = w.CreatedBy
+      LEFT JOIN dbo.Users ua ON ua.UserId = w.ActionBy
       WHERE w.WmsWaveId = @waveId
     `, { inputs: { waveId: { type: sql.Int, value: waveId } } });
 
@@ -317,9 +419,92 @@ export const wmsTaskService = {
       createdBy: wave.CreatedBy,
       createdByName: wave.CreatedByName,
       createdAt: wave.CreatedAt,
+      actionBy: wave.ActionBy ?? null,
+      actionByName: wave.ActionByName || null,
+      actionByAvatarUrl: wave.ActionByAvatarUrl || null,
+      actionAt: wave.ActionAt ?? null,
       completedAt: wave.CompletedAt,
       tasks
     };
+  },
+
+  async claimWave({ waveId, userId }, existingTx = null) {
+    const execute = async (tx) => {
+      const req = new sql.Request(tx);
+      req.input('waveId', sql.Int, waveId);
+      const res = await req.query(`
+        SELECT WmsWaveId, Status, ActionBy
+        FROM dbo.WmsWaves
+        WHERE WmsWaveId = @waveId
+      `);
+      const wave = res.recordset[0];
+      if (!wave) throw badRequest('Wave not found');
+      if (wave.Status === 'completed') throw badRequest('Wave is already completed');
+      if (wave.ActionBy && wave.ActionBy !== userId) throw badRequest('Wave is being handled by another user');
+
+      const upd = new sql.Request(tx);
+      upd.input('waveId', sql.Int, waveId);
+      upd.input('userId', sql.Int, userId);
+      await upd.query(`
+        UPDATE dbo.WmsWaves
+        SET
+          ActionBy = @userId,
+          ActionAt = COALESCE(ActionAt, SYSUTCDATETIME())
+        WHERE WmsWaveId = @waveId
+      `);
+      return { success: true };
+    };
+
+    if (existingTx) return await execute(existingTx);
+    return await mssqlTransaction('DEFAULT', execute);
+  },
+
+  async unclaimWave({ waveId, userId, privileged = false }, existingTx = null) {
+    const execute = async (tx) => {
+      const req = new sql.Request(tx);
+      req.input('waveId', sql.Int, waveId);
+      const res = await req.query(`
+        SELECT WmsWaveId, Status, ActionBy
+        FROM dbo.WmsWaves
+        WHERE WmsWaveId = @waveId
+      `);
+      const wave = res.recordset[0];
+      if (!wave) throw badRequest('Wave not found');
+      if (wave.Status === 'completed') throw badRequest('Wave is already completed');
+
+      if (!wave.ActionBy) return { success: true };
+      if (wave.ActionBy !== userId && !privileged) throw forbidden('Forbidden: cannot unclaim wave owned by another user');
+
+      const upd = new sql.Request(tx);
+      upd.input('waveId', sql.Int, waveId);
+      await upd.query(`
+        UPDATE dbo.WmsWaves
+        SET ActionBy = NULL, ActionAt = NULL
+        WHERE WmsWaveId = @waveId
+      `);
+
+      const taskReq = new sql.Request(tx);
+      taskReq.input('waveId', sql.Int, waveId);
+      if (privileged) {
+        await taskReq.query(`
+          UPDATE dbo.WmsTasks
+          SET ActionBy = NULL, ActionAt = NULL
+          WHERE WaveId = @waveId AND Status <> 'completed'
+        `);
+      } else {
+        taskReq.input('userId', sql.Int, userId);
+        await taskReq.query(`
+          UPDATE dbo.WmsTasks
+          SET ActionBy = NULL, ActionAt = NULL
+          WHERE WaveId = @waveId AND Status <> 'completed' AND ActionBy = @userId
+        `);
+      }
+
+      return { success: true };
+    };
+
+    if (existingTx) return await execute(existingTx);
+    return await mssqlTransaction('DEFAULT', execute);
   },
 
   async confirmTask({ taskId, lines = [], userId }, existingTx = null) {
@@ -328,23 +513,27 @@ export const wmsTaskService = {
       const taskReq = new sql.Request(tx);
       taskReq.input('taskId', sql.BigInt, taskId);
       const taskRes = await taskReq.query(`
-        SELECT WmsTaskId, TaskType, ReferenceType, ReferenceId, WarehouseId, Status, WaveId
+        SELECT WmsTaskId, TaskType, ReferenceType, ReferenceId, WarehouseId, Status, WaveId, ActionBy
         FROM dbo.WmsTasks
         WHERE WmsTaskId = @taskId
       `);
       const task = taskRes.recordset[0];
       if (!task) throw badRequest('WMS Task not found');
       if (task.Status === 'completed') throw badRequest('WMS Task is already completed');
+      if (task.ActionBy && task.ActionBy !== userId) throw badRequest('WMS Task is being handled by another user');
 
       // 2. Update each line
-      for (const line of lines) {
-        if (!line.lineId) continue;
+	    for (const line of lines) {
+	      if (!line.lineId) continue;
 
-        const qtyCompleted = line.quantityCompleted || 0;
-        const lotId = line.lotId || null;
-        let inventoryUnitId = line.inventoryUnitId || null;
-        const fromLocationId = line.fromLocationId || null;
-        const toLocationId = line.toLocationId || null;
+	      const qtyCompleted = line.quantityCompleted || 0;
+	      const lotId = line.lotId || null;
+	      let inventoryUnitId = line.inventoryUnitId || null;
+	      const fromLocationId = line.fromLocationId || null;
+	      const toLocationId = line.toLocationId || null;
+        const fromPalletNo = line.fromPalletNo ? String(line.fromPalletNo).trim() : null;
+        const toPalletNoRaw = line.toPalletNo || line.palletNo || line.palletId || null;
+        const toPalletNo = toPalletNoRaw ? String(toPalletNoRaw).trim() : null;
 
         const lineReq = new sql.Request(tx);
         lineReq.input('lineId', sql.BigInt, line.lineId);
@@ -363,21 +552,23 @@ export const wmsTaskService = {
         const taskLine = taskLineRes.recordset[0];
         if (!taskLine) continue;
 
-        // Resolve inventoryUnitId if a custom palletNo is scanned/provided
-        const inputPalletNo = line.palletNo || line.palletId || null;
-        if (inputPalletNo) {
-          const iuLookupRes = await tx.request()
-            .input('palletNo', sql.NVarChar(100), inputPalletNo.trim())
-            .input('itemId', sql.Int, taskLine.ItemId)
-            .query(`
-              SELECT TOP 1 InventoryUnitId 
-              FROM dbo.InventoryUnits 
-              WHERE (PalletNo = @palletNo OR TrackingNo = @palletNo) AND ItemId = @itemId
-            `);
-          if (iuLookupRes.recordset.length > 0) {
-            inventoryUnitId = iuLookupRes.recordset[0].InventoryUnitId;
-          }
-        }
+	      // Resolve inventoryUnitId by pallet/track scan (picking only)
+	      if (task.TaskType === 'picking') {
+	        const inputPalletNo = line.palletNo || line.palletId || null;
+	        if (inputPalletNo) {
+	          const iuLookupRes = await tx.request()
+	            .input('palletNo', sql.NVarChar(100), String(inputPalletNo).trim())
+	            .input('itemId', sql.Int, taskLine.ItemId)
+	            .query(`
+	              SELECT TOP 1 InventoryUnitId 
+	              FROM dbo.InventoryUnits 
+	              WHERE (PalletNo = @palletNo OR TrackingNo = @palletNo) AND ItemId = @itemId
+	            `);
+	          if (iuLookupRes.recordset.length > 0) {
+	            inventoryUnitId = iuLookupRes.recordset[0].InventoryUnitId;
+	          }
+	        }
+	      }
 
         // If it's a picking task, deduct from the source InventoryUnit
         if (task.TaskType === 'picking' && inventoryUnitId && qtyCompleted > 0) {
@@ -399,7 +590,7 @@ export const wmsTaskService = {
         }
 
         // If it's a putaway task and toLocationId is specified, create or update the InventoryUnit
-        if (task.TaskType === 'putaway' && toLocationId) {
+	        if (task.TaskType === 'putaway' && toLocationId) {
           const finalLotId = lotId || taskLine.LotId;
           let lotNo = '';
           if (finalLotId) {
@@ -503,10 +694,10 @@ export const wmsTaskService = {
           });
 
           // Insert stock relocation movement
-          await stockService.insertStockMovement(tx, {
-            movementType: 'transfer',
-            referenceType: 'WMS',
-            referenceId: taskId,
+	          await stockService.insertStockMovement(tx, {
+	            movementType: 'transfer',
+	            referenceType: 'WMS',
+	            referenceId: taskId,
             itemId: taskLine.ItemId,
             itemSpecId: taskLine.ItemSpecId,
             fromWarehouseId: task.WarehouseId,
@@ -514,14 +705,109 @@ export const wmsTaskService = {
             toWarehouseId: task.WarehouseId,
             toLocationId: toLocationId,
             lotId: finalLotId,
-            lotNo: lotNo,
-            quantity: qtyCompleted,
-            createdBy: userId || 1
-          });
-        }
+	            lotNo: lotNo,
+	            quantity: qtyCompleted,
+	            createdBy: userId || 1
+	          });
+	        }
 
-        lineReq.input('unitId', sql.BigInt, inventoryUnitId);
-        lineReq.input('palletNo', sql.NVarChar(100), line.palletId || line.palletNo || taskLine.PalletNo || null);
+          if (task.TaskType === 'transfer') {
+            if (!inventoryUnitId) throw badRequest('inventoryUnitId is required for transfer');
+            if (!fromLocationId) throw badRequest('fromLocationId is required for transfer');
+            if (!toLocationId) throw badRequest('toLocationId is required for transfer');
+            if (!fromPalletNo) throw badRequest('fromPalletNo is required for transfer');
+            if (qtyCompleted <= 0) throw badRequest('quantityCompleted must be greater than zero');
+
+            const unitRes = await tx.request()
+              .input('unitId', sql.BigInt, inventoryUnitId)
+              .query(`
+                SELECT iu.InventoryUnitId, iu.ItemId, iu.ItemSpecId, iu.TrackingNo, iu.PalletNo,
+                       iu.LotId, l.LotNo,
+                       iu.WarehouseId, iu.LocationId, iu.QtySheet
+                FROM dbo.InventoryUnits iu
+                LEFT JOIN dbo.Lots l ON l.LotId = iu.LotId
+                WHERE iu.InventoryUnitId = @unitId
+              `);
+            if (unitRes.recordset.length === 0) throw badRequest('Inventory unit not found');
+            const unit = unitRes.recordset[0];
+
+            const fromPalletNorm = fromPalletNo.toLowerCase();
+            const okPallet = [unit.TrackingNo, unit.PalletNo]
+              .filter(Boolean)
+              .some((p) => String(p).trim().toLowerCase() === fromPalletNorm);
+            if (!okPallet) throw badRequest('Source pallet does not match the inventory unit');
+            if (Number(unit.LocationId) !== Number(fromLocationId)) throw badRequest('Source location does not match the inventory unit');
+
+            const availableQty = Number(unit.QtySheet || 0);
+            if (Number(qtyCompleted) !== availableQty) {
+              throw badRequest('Partial transfers are not supported. Move the full unit quantity or split the unit first.');
+            }
+
+            const toWarehouseId = task.ReferenceType === 'INVENTORY_TRANSFER' && task.ReferenceId
+              ? Number(task.ReferenceId)
+              : Number(unit.WarehouseId);
+
+            const toLocRes = await tx.request()
+              .input('locId', sql.Int, toLocationId)
+              .query(`SELECT WarehouseId FROM dbo.WarehouseLocations WHERE LocationId = @locId`);
+            if (toLocRes.recordset.length === 0) throw badRequest('Target location not found');
+            if (Number(toLocRes.recordset[0].WarehouseId) !== toWarehouseId) {
+              throw badRequest('Target location does not belong to the target warehouse');
+            }
+
+            const finalPalletNo = toPalletNo || taskLine.PalletNo || unit.PalletNo || null;
+            await tx.request()
+              .input('unitId', sql.BigInt, inventoryUnitId)
+              .input('toWhId', sql.Int, toWarehouseId)
+              .input('toLocId', sql.Int, toLocationId)
+              .input('palletNo', sql.NVarChar(100), finalPalletNo)
+              .query(`
+                UPDATE dbo.InventoryUnits
+                SET WarehouseId = @toWhId,
+                    LocationId = @toLocId,
+                    PalletNo = @palletNo
+                WHERE InventoryUnitId = @unitId
+              `);
+
+            await stockService.updateStockOnHand(tx, {
+              itemId: unit.ItemId,
+              itemSpecId: unit.ItemSpecId,
+              warehouseId: unit.WarehouseId,
+              locationId: unit.LocationId,
+              lotId: unit.LotId,
+              lotNo: unit.LotNo,
+              quantityDelta: -qtyCompleted
+            });
+
+            await stockService.updateStockOnHand(tx, {
+              itemId: unit.ItemId,
+              itemSpecId: unit.ItemSpecId,
+              warehouseId: toWarehouseId,
+              locationId: toLocationId,
+              lotId: unit.LotId,
+              lotNo: unit.LotNo,
+              quantityDelta: qtyCompleted
+            });
+
+            await stockService.insertStockMovement(tx, {
+              movementType: 'transfer',
+              referenceType: 'WMS',
+              referenceId: taskId,
+              itemId: unit.ItemId,
+              itemSpecId: unit.ItemSpecId,
+              fromWarehouseId: unit.WarehouseId,
+              fromLocationId: unit.LocationId,
+              toWarehouseId,
+              toLocationId,
+              lotId: unit.LotId,
+              lotNo: unit.LotNo,
+              quantity: qtyCompleted,
+              createdBy: userId || 1
+            });
+          }
+
+	        lineReq.input('unitId', sql.BigInt, inventoryUnitId);
+	        lineReq.input('palletNo', sql.NVarChar(100), toPalletNo || line.palletId || line.palletNo || taskLine.PalletNo || null);
 
         await lineReq.query(`
           UPDATE dbo.WmsTaskLines
@@ -564,9 +850,14 @@ export const wmsTaskService = {
       // 3. Mark task as completed
       const updateTaskReq = new sql.Request(tx);
       updateTaskReq.input('taskId', sql.BigInt, taskId);
+      updateTaskReq.input('userId', sql.Int, userId);
       await updateTaskReq.query(`
         UPDATE dbo.WmsTasks
-        SET Status = 'completed', CompletedAt = SYSUTCDATETIME()
+        SET
+          Status = 'completed',
+          CompletedAt = SYSUTCDATETIME(),
+          CompletedBy = @userId,
+          ActionBy = NULL
         WHERE WmsTaskId = @taskId
       `);
 
@@ -685,6 +976,68 @@ export const wmsTaskService = {
         }
       }
 
+      // 3.2 If the task references a Goods Receipt (GR), update GoodsReceiptLines with actual putaway location and pallet data
+      if (task.ReferenceType === 'GR' && task.ReferenceId && task.TaskType === 'putaway') {
+        const grId = task.ReferenceId;
+
+        const origLinesRes = await tx.request()
+          .input('grId', sql.Int, grId)
+          .query(`
+            SELECT GoodsReceiptLineId, ItemId, ItemSpecId, LotId
+            FROM dbo.GoodsReceiptLines
+            WHERE GoodsReceiptId = @grId
+            ORDER BY LineNum
+          `);
+        const origLines = origLinesRes.recordset;
+
+        const completedLinesRes = await tx.request()
+          .input('taskId', sql.BigInt, taskId)
+          .query(`
+            SELECT ItemId, ItemSpecId, LotId, ToLocationId, PalletNo
+            FROM dbo.WmsTaskLines
+            WHERE WmsTaskId = @taskId AND QuantityCompleted > 0
+            ORDER BY WmsTaskLineId
+          `);
+        const completedLines = completedLinesRes.recordset;
+
+        if (completedLines.length > 0 && origLines.length > 0) {
+          const origByKey = new Map();
+          for (const line of origLines) {
+            const key = `${line.ItemId}-${line.ItemSpecId ?? 'null'}-${line.LotId ?? 'null'}`;
+            if (!origByKey.has(key)) origByKey.set(key, []);
+            origByKey.get(key).push(line);
+          }
+
+          for (const putaway of completedLines) {
+            const key = `${putaway.ItemId}-${putaway.ItemSpecId ?? 'null'}-${putaway.LotId ?? 'null'}`;
+            const candidates = origByKey.get(key) || [];
+            const target = candidates.shift() || origLines.shift();
+            if (!target) continue;
+
+            const updateReq = new sql.Request(tx);
+            updateReq.input('lineId', sql.BigInt, target.GoodsReceiptLineId);
+            updateReq.input('locId', sql.Int, putaway.ToLocationId);
+            updateReq.input('palletNo', sql.NVarChar(100), putaway.PalletNo || null);
+            await updateReq.query(`
+              UPDATE dbo.GoodsReceiptLines
+              SET
+                LocationId = COALESCE(@locId, LocationId),
+                PalletNo = COALESCE(@palletNo, PalletNo)
+              WHERE GoodsReceiptLineId = @lineId
+            `);
+          }
+
+          await tx.request()
+            .input('grId', sql.Int, grId)
+            .input('userId', sql.Int, userId)
+            .input('taskId', sql.BigInt, taskId)
+            .query(`
+              INSERT INTO dbo.DocumentStatusHistory (DocumentType, DocumentId, FromStatus, ToStatus, ChangedBy, Notes)
+              VALUES ('GR', @grId, 'received', 'received', @userId, 'Putaway location and pallet updated from WMS Task #' + CAST(@taskId AS VARCHAR))
+            `);
+        }
+      }
+
       // If task belongs to a wave, check if all tasks in wave are completed
       if (task.WaveId) {
         const waveCheckReq = new sql.Request(tx);
@@ -697,7 +1050,10 @@ export const wmsTaskService = {
         if (waveCheckRes.recordset[0].OpenTaskCount === 0) {
           await waveCheckReq.query(`
             UPDATE dbo.WmsWaves
-            SET Status = 'completed', CompletedAt = SYSUTCDATETIME()
+            SET
+              Status = 'completed',
+              CompletedAt = SYSUTCDATETIME(),
+              ActionAt = COALESCE(ActionAt, SYSUTCDATETIME())
             WHERE WmsWaveId = @waveId
           `);
         }
@@ -1151,4 +1507,3 @@ export const wmsTaskService = {
     };
   }
 };
-

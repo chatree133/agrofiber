@@ -46,6 +46,26 @@ export function CompanyProvider({ children }) {
     await ApiClient.delete(`/api/companies/${companyId}/branches/${branchId}`, { headers: authHeaders });
   };
 
+  const getDocumentSeries = async () => {
+    const data = await ApiClient.get('/api/companies/document-series', { headers: authHeaders });
+    return data.data;
+  };
+
+  const updateDocumentSeries = async (seriesId, payload) => {
+    const data = await ApiClient.put(`/api/companies/document-series/${seriesId}`, payload, { headers: authHeaders });
+    return data.data;
+  };
+
+  const getSmtpSettings = async () => {
+    const data = await ApiClient.get('/api/companies/smtp-settings', { headers: authHeaders });
+    return data.data;
+  };
+
+  const updateSmtpSettings = async (smtpId, payload) => {
+    const data = await ApiClient.put(`/api/companies/smtp-settings/${smtpId}`, payload, { headers: authHeaders });
+    return data.data;
+  };
+
   const value = useMemo(() => ({
     getCompanies,
     getCompany,
@@ -54,7 +74,11 @@ export function CompanyProvider({ children }) {
     getBranches,
     createBranch,
     updateBranch,
-    deleteBranch
+    deleteBranch,
+    getDocumentSeries,
+    updateDocumentSeries,
+    getSmtpSettings,
+    updateSmtpSettings
   }), [authHeaders]);
 
   return (

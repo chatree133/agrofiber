@@ -27,8 +27,28 @@ export function WmsProvider({ children }) {
     return res.data;
   };
 
+  const claimWmsWave = async (waveId) => {
+    const res = await ApiClient.post(`/api/wms/waves/${waveId}/claim`, {}, { headers: authHeaders });
+    return res.data;
+  };
+
+  const unclaimWmsWave = async (waveId) => {
+    const res = await ApiClient.post(`/api/wms/waves/${waveId}/unclaim`, {}, { headers: authHeaders });
+    return res.data;
+  };
+
   const getWmsTaskDetail = async (id) => {
     const res = await ApiClient.get(`/api/wms/tasks/${id}`, { headers: authHeaders });
+    return res.data;
+  };
+
+  const claimWmsTask = async (taskId) => {
+    const res = await ApiClient.post(`/api/wms/tasks/${taskId}/claim`, {}, { headers: authHeaders });
+    return res.data;
+  };
+
+  const unclaimWmsTask = async (taskId) => {
+    const res = await ApiClient.post(`/api/wms/tasks/${taskId}/unclaim`, {}, { headers: authHeaders });
     return res.data;
   };
 
@@ -60,9 +80,13 @@ export function WmsProvider({ children }) {
   const value = useMemo(() => ({
     getWmsTasks,
     getWmsTaskDetail,
+    claimWmsTask,
+    unclaimWmsTask,
     getWmsWaves,
     createWmsWave,
     getWmsWaveDetail,
+    claimWmsWave,
+    unclaimWmsWave,
     confirmWmsTask,
     getWarehouseLocations,
     allocateWaveInventory,

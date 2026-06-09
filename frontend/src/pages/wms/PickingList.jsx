@@ -139,6 +139,12 @@ export default function PickingList() {
       key: 'createdByName',
     },
     {
+      title: 'ผู้ดำเนินการ',
+      dataIndex: 'actionByName',
+      key: 'actionByName',
+      render: (text) => text || '-',
+    },
+    {
       title: 'วันที่สร้าง',
       dataIndex: 'createdAt',
       key: 'createdAt',

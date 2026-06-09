@@ -1,17 +1,22 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Table, Tag, Typography, message, Modal, Checkbox } from 'antd';
-import { ArrowLeftOutlined, CheckCircleOutlined, PrinterOutlined, BranchesOutlined, ScanOutlined, UndoOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, CheckCircleOutlined, PrinterOutlined, BranchesOutlined, ScanOutlined, UndoOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useWms } from '../../context/WmsContext.jsx';
 import { useMasterData } from '../../context/MasterDataContext.jsx';
 import { Scanner } from '@yudiel/react-qr-scanner';
+import { useAuth } from '../../context/AuthContext.jsx';
 
 const { Title, Text, Paragraph } = Typography;
 
 export default function WavePickingDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { getWmsWaveDetail, getWarehouseLocations, confirmWmsTask, allocateWaveInventory, splitWmsTaskLine } = useWms();
+  const { user } = useAuth();
+  const currentUserId = user?.id;
+  const roles = user?.roles || [];
+  const canForceUnclaim = roles.includes('admin') || roles.includes('warehouse_manager');
+  const { getWmsWaveDetail, claimWmsWave, unclaimWmsWave, claimWmsTask, getWarehouseLocations, confirmWmsTask, allocateWaveInventory, splitWmsTaskLine } = useWms();
   const { lookups, fetchLookups } = useMasterData();
   const grades = lookups.grades || [];
 
@@ -19,6 +24,7 @@ export default function WavePickingDetail() {
   const [loading, setLoading] = useState(false);
   const [locations, setLocations] = useState([]);
   const [submitting, setSubmitting] = useState(false);
+  const [claiming, setClaiming] = useState(false);
   const [lineInputs, setLineInputs] = useState({}); // WmsTaskLineId -> { qtyCompleted, lotNo, locationId, palletNo, scannedLocationCode, isPicked, condition }
 
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false);
@@ -71,6 +77,43 @@ export default function WavePickingDetail() {
       message.error('โหลดรายละเอียดคลื่นงานไม่สำเร็จ: ' + err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleClaimWave = async () => {
+    if (!wave || wave.status === 'completed') return;
+    if (wave.actionBy && currentUserId && wave.actionBy !== currentUserId) {
+      message.error(`คลื่นงานนี้กำลังถูกดำเนินการโดย ${wave.actionByName || 'ผู้ใช้อื่น'} อยู่แล้ว`);
+      return;
+    }
+    setClaiming(true);
+    try {
+      await claimWmsWave(wave.id);
+      await fetchWaveDetails();
+      message.success('เริ่มดำเนินการคลื่นงานนี้แล้ว');
+    } catch (err) {
+      message.error('ไม่สามารถเริ่มดำเนินการคลื่นงานนี้ได้: ' + err.message);
+    } finally {
+      setClaiming(false);
+    }
+  };
+
+  const handleUnclaimWave = async () => {
+    if (!wave || wave.status === 'completed') return;
+    if (!wave.actionBy) return;
+    if (wave.actionBy && currentUserId && wave.actionBy !== currentUserId && !canForceUnclaim) {
+      message.error(`คลื่นงานนี้กำลังถูกดำเนินการโดย ${wave.actionByName || 'ผู้ใช้อื่น'} อยู่แล้ว`);
+      return;
+    }
+    setClaiming(true);
+    try {
+      await unclaimWmsWave(wave.id);
+      await fetchWaveDetails();
+      message.success('ยกเลิกการดำเนินการคลื่นงานเรียบร้อยแล้ว');
+    } catch (err) {
+      message.error('ไม่สามารถยกเลิกการดำเนินการคลื่นงานได้: ' + err.message);
+    } finally {
+      setClaiming(false);
     }
   };
 
@@ -222,10 +265,28 @@ export default function WavePickingDetail() {
   const handleConfirmWave = async () => {
     // console.log("wave", wave);
     if (!wave) return;
+    if (wave.actionBy && currentUserId && wave.actionBy !== currentUserId) {
+      message.error(`คลื่นงานนี้กำลังถูกดำเนินการโดย ${wave.actionByName || 'ผู้ใช้อื่น'} อยู่แล้ว`);
+      return;
+    }
     setSubmitting(true);
     try {
+      // Make sure the wave is claimed (sets ActionBy/ActionAt)
+      if (!wave.actionBy) {
+        await claimWmsWave(wave.id);
+      }
+
       for (const task of wave.tasks) {
         if (task.status === 'completed') continue;
+
+        if (task.actionBy && currentUserId && task.actionBy !== currentUserId) {
+          throw new Error(`Task #${task.id} กำลังถูกดำเนินการโดย ${task.actionByName || 'ผู้ใช้อื่น'} อยู่แล้ว`);
+        }
+
+        // Claim each task to record ActionBy/ActionAt and prevent concurrent confirms
+        if (!task.actionBy) {
+          await claimWmsTask(task.id);
+        }
 
         const taskLines = task.lines.map(line => {
           const inputs = lineInputs[line.id] || {};
@@ -298,6 +359,9 @@ export default function WavePickingDetail() {
   if (loading) return <div className="text-center py-8">กำลังโหลดข้อมูล...</div>;
   if (!wave) return <div className="text-center py-8">ไม่พบข้อมูลคลื่นงาน</div>;
 
+  const isClaimedByOther = Boolean(wave.actionBy && currentUserId && wave.actionBy !== currentUserId);
+  const canUnclaimWave = Boolean(wave.actionBy && (wave.actionBy === currentUserId || canForceUnclaim));
+
   const allLines = [];
   wave.tasks?.forEach(task => {
     task.lines?.forEach(line => {
@@ -329,6 +393,7 @@ export default function WavePickingDetail() {
             type={picked ? 'primary' : 'default'}
             ghost={picked}
             size="small"
+            disabled={isClaimedByOther}
             style={{
               borderColor: picked ? '#52c41a' : undefined,
               color: picked ? '#52c41a' : undefined,
@@ -488,8 +553,27 @@ export default function WavePickingDetail() {
           {wave.status !== 'completed' && (
             <>
               <Button
+                icon={<PlayCircleOutlined />}
+                onClick={handleClaimWave}
+                loading={claiming}
+                disabled={Boolean(wave.actionBy)}
+                className="hidden sm:inline-flex"
+              >
+                {wave.actionBy ? 'กำลังดำเนินการอยู่' : 'เริ่มดำเนินการ'}
+              </Button>
+              {canUnclaimWave ? (
+                <Button
+                  danger
+                  onClick={handleUnclaimWave}
+                  loading={claiming}
+                >
+                  Unclaim
+                </Button>
+              ) : null}
+              <Button
                 onClick={handleReallocate}
                 loading={submitting}
+                disabled={isClaimedByOther}
                 className="hidden sm:inline-flex"
               >
                 คำนวณตำแหน่งใหม่ (Re-allocate)
@@ -498,6 +582,7 @@ export default function WavePickingDetail() {
                 icon={<UndoOutlined />}
                 onClick={handleClearInputs}
                 danger
+                disabled={isClaimedByOther}
               >
                 ล้างค่า
               </Button>
@@ -506,6 +591,7 @@ export default function WavePickingDetail() {
                 icon={<CheckCircleOutlined />}
                 onClick={handleConfirmWaveWithConfirm}
                 loading={submitting}
+                disabled={isClaimedByOther}
               >
                 ยืนยันการหยิบคลื่นนี้
               </Button>
@@ -518,7 +604,7 @@ export default function WavePickingDetail() {
         <Col span={24}>
           <Card className="shadow-sm">
             <Row gutter={[32, 16]}>
-              <Col xs={24} sm={8}>
+              <Col xs={24} sm={6}>
                 <Text type="secondary">สถานะกลุ่ม Wave</Text>
                 <div className="mt-1">
                   <Tag color={wave.status === 'completed' ? 'green' : 'orange'} style={{ fontSize: '14px', padding: '4px 10px' }}>
@@ -526,16 +612,30 @@ export default function WavePickingDetail() {
                   </Tag>
                 </div>
               </Col>
-              <Col xs={24} sm={8}>
+              <Col xs={24} sm={6}>
                 <Text type="secondary">วันที่สร้าง</Text>
                 <div className="mt-1 text-base font-medium">
                   {new Date(wave.createdAt).toLocaleString('th-TH')}
                 </div>
               </Col>
-              <Col xs={24} sm={8}>
+              <Col xs={24} sm={6}>
                 <Text type="secondary">ผู้บันทึก Wave</Text>
                 <div className="mt-1 text-base font-medium">
                   {wave.createdByName || '-'}
+                </div>
+              </Col>
+              <Col xs={24} sm={6}>
+                <Text type="secondary">ผู้ดำเนินการ</Text>
+                <div className="mt-1 text-base font-medium">
+                  {wave.actionByName || '-'}
+                  {wave.actionAt ? (
+                    <Text type="secondary" className="ml-2" style={{ fontSize: '12px' }}>
+                      ({new Date(wave.actionAt).toLocaleString('th-TH')})
+                    </Text>
+                  ) : null}
+                  {isClaimedByOther ? (
+                    <Tag color="red" className="ml-2">กำลังถูกดำเนินการโดยผู้อื่น</Tag>
+                  ) : null}
                 </div>
               </Col>
             </Row>

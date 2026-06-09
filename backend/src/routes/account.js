@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import { getMssqlPool, mssqlQuery, sql } from '../lib/mssql.js';
+import emailService from '../services/common/emailService.js';
 import { authenticate } from '../middleware/auth.js';
 import { allowRoles } from '../middleware/roles.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -169,7 +170,7 @@ async function getUsers(whereClause = '', inputs = {}) {
       r.RoleCode,
       r.RoleName
     FROM dbo.Users u
-    LEFT JOIN dbo.UserRoles ur ON ur.UserId = u.UserId
+    LEFT JOIN dbo.UserRoles ur ON ur.UserId = u.UserId AND ur.IsActive = 1
     LEFT JOIN dbo.Roles r ON r.RoleId = ur.RoleId
     ${whereClause}
     ORDER BY u.UserId, r.RoleCode
@@ -228,7 +229,7 @@ function buildAccountFilters(query) {
       SELECT 1
       FROM dbo.UserRoles urFilter
       JOIN dbo.Roles rFilter ON rFilter.RoleId = urFilter.RoleId
-      WHERE urFilter.UserId = u.UserId
+      WHERE urFilter.UserId = u.UserId AND urFilter.IsActive = 1
         AND (${roleConditions.join(' OR ')})
     )`);
   }
@@ -275,7 +276,7 @@ router.get(
         (SELECT COUNT(1) FROM FilteredUsers) AS TotalCount
       FROM PagedUsers pu
       JOIN dbo.Users u ON u.UserId = pu.UserId
-      LEFT JOIN dbo.UserRoles ur ON ur.UserId = u.UserId
+      LEFT JOIN dbo.UserRoles ur ON ur.UserId = u.UserId AND ur.IsActive = 1
       LEFT JOIN dbo.Roles r ON r.RoleId = ur.RoleId
       ORDER BY u.UserId, r.RoleCode
     `, {
@@ -303,10 +304,171 @@ router.get(
     const rows = await mssqlQuery('DEFAULT', `
       SELECT RoleId AS id, RoleCode AS code, RoleName AS name
       FROM dbo.Roles
+      WHERE IsActive = 1
       ORDER BY RoleCode
     `);
 
     res.json({ data: rows });
+  }),
+);
+
+router.get(
+  '/roles/:id',
+  asyncHandler(async (req, res) => {
+    const roleId = Number(req.params.id);
+    if (!Number.isInteger(roleId) || roleId <= 0) {
+      res.status(400).json({ message: 'Invalid role id' });
+      return;
+    }
+
+    const rows = await mssqlQuery('DEFAULT', `
+      SELECT RoleId AS id, RoleCode AS code, RoleName AS name
+      FROM dbo.Roles
+      WHERE RoleId = @roleId AND IsActive = 1
+    `, {
+      inputs: {
+        roleId: { type: sql.Int, value: roleId },
+      },
+    });
+
+    if (!rows.length) {
+      res.status(404).json({ message: 'Role not found' });
+      return;
+    }
+
+    res.json({ data: rows[0] });
+  }),
+);
+
+router.post(
+  '/roles',
+  asyncHandler(async (req, res) => {
+    const roleCode = String(req.body.roleCode || '').trim();
+    const roleName = String(req.body.roleName || '').trim();
+
+    if (!roleCode || !roleName) {
+      res.status(400).json({ message: 'roleCode and roleName are required' });
+      return;
+    }
+
+    const pool = await getMssqlPool('DEFAULT');
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+
+    try {
+      const insertResult = await transaction
+        .request()
+        .input('roleCode', sql.NVarChar(50), roleCode)
+        .input('roleName', sql.NVarChar(100), roleName)
+        .query(`
+          INSERT INTO dbo.Roles (RoleCode, RoleName)
+          OUTPUT inserted.RoleId
+          VALUES (@roleCode, @roleName)
+        `);
+
+      const roleId = insertResult.recordset[0].RoleId;
+      await transaction.commit();
+
+      const rows = await mssqlQuery('DEFAULT', `
+        SELECT RoleId AS id, RoleCode AS code, RoleName AS name
+        FROM dbo.Roles
+        WHERE RoleId = @roleId
+      `, {
+        inputs: { roleId: { type: sql.Int, value: roleId } },
+      });
+
+      res.status(201).json({ data: rows[0] });
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
+  }),
+);
+
+router.put(
+  '/roles/:id',
+  asyncHandler(async (req, res) => {
+    const roleId = Number(req.params.id);
+    const roleCode = req.body.roleCode !== undefined ? String(req.body.roleCode).trim() : undefined;
+    const roleName = req.body.roleName !== undefined ? String(req.body.roleName).trim() : undefined;
+
+    if (!Number.isInteger(roleId) || roleId <= 0) {
+      res.status(400).json({ message: 'Invalid role id' });
+      return;
+    }
+    if (roleCode === undefined && roleName === undefined) {
+      res.status(400).json({ message: 'roleCode or roleName is required' });
+      return;
+    }
+
+    const updates = [];
+    const request = (await getMssqlPool('DEFAULT')).request().input('roleId', sql.Int, roleId);
+
+    if (roleCode !== undefined) {
+      if (!roleCode) {
+        res.status(400).json({ message: 'roleCode cannot be empty' });
+        return;
+      }
+      request.input('roleCode', sql.NVarChar(50), roleCode);
+      updates.push('RoleCode = @roleCode');
+    }
+    if (roleName !== undefined) {
+      if (!roleName) {
+        res.status(400).json({ message: 'roleName cannot be empty' });
+        return;
+      }
+      request.input('roleName', sql.NVarChar(100), roleName);
+      updates.push('RoleName = @roleName');
+    }
+
+    const result = await request.query(`
+      UPDATE dbo.Roles
+      SET ${updates.join(', ')}
+      WHERE RoleId = @roleId
+      SELECT @@ROWCOUNT AS affected
+    `);
+
+    if (!result.recordset[0]?.affected) {
+      res.status(404).json({ message: 'Role not found' });
+      return;
+    }
+
+    const updatedRows = await mssqlQuery('DEFAULT', `
+      SELECT RoleId AS id, RoleCode AS code, RoleName AS name
+      FROM dbo.Roles
+      WHERE RoleId = @roleId
+    `, {
+      inputs: { roleId: { type: sql.Int, value: roleId } },
+    });
+
+    res.json({ data: updatedRows[0] });
+  }),
+);
+
+router.delete(
+  '/roles/:id',
+  asyncHandler(async (req, res) => {
+    const roleId = Number(req.params.id);
+    if (!Number.isInteger(roleId) || roleId <= 0) {
+      res.status(400).json({ message: 'Invalid role id' });
+      return;
+    }
+
+    const result = await mssqlQuery('DEFAULT', `
+      UPDATE dbo.Roles
+      SET IsActive = 0
+      WHERE RoleId = @roleId AND IsActive = 1
+      SELECT @@ROWCOUNT AS affected
+    `, {
+      inputs: { roleId: { type: sql.Int, value: roleId } },
+    });
+
+    if (!result[0]?.affected) {
+      res.status(404).json({ message: 'Role not found' });
+      return;
+    }
+
+    res.status(204).send();
   }),
 );
 
@@ -397,16 +559,31 @@ router.post(
           .request()
           .input('userId', sql.Int, userId)
           .input('roleId', sql.Int, roleId)
-          .query('INSERT INTO dbo.UserRoles (UserId, RoleId) VALUES (@userId, @roleId)');
+          .query('INSERT INTO dbo.UserRoles (UserId, RoleId, IsActive) VALUES (@userId, @roleId, 1)');
       }
 
       await transaction.commit();
+
+      let emailSent = false;
+      if (email) {
+        try {
+          await emailService.sendNewAccountEmail({
+            to: email,
+            username,
+            password,
+            loginUrl: 'https://erp.agrofiber.com',
+          });
+          emailSent = true;
+        } catch (emailError) {
+          console.error('Failed to send new account email:', emailError);
+        }
+      }
 
       const [user] = await getUsers('WHERE u.UserId = @userId', {
         userId: { type: sql.Int, value: userId },
       });
 
-      res.status(201).json({ data: user });
+      res.status(201).json({ data: user, emailSent });
     } catch (error) {
       await transaction.rollback();
       throw error;
@@ -500,14 +677,31 @@ router.put(
 
       if (roles !== undefined) {
         const roleIds = await resolveRoleIds(transaction, roles);
-        await transaction.request().input('userId', sql.Int, userId).query('DELETE FROM dbo.UserRoles WHERE UserId = @userId');
+
+        await transaction
+          .request()
+          .input('userId', sql.Int, userId)
+          .query('UPDATE dbo.UserRoles SET IsActive = 0 WHERE UserId = @userId AND IsActive = 1');
 
         for (const roleId of roleIds) {
-          await transaction
+          const updateResult = await transaction
             .request()
             .input('userId', sql.Int, userId)
             .input('roleId', sql.Int, roleId)
-            .query('INSERT INTO dbo.UserRoles (UserId, RoleId) VALUES (@userId, @roleId)');
+            .query(`
+              UPDATE dbo.UserRoles
+              SET IsActive = 1
+              WHERE UserId = @userId AND RoleId = @roleId
+              SELECT @@ROWCOUNT AS affected
+            `);
+
+          if (!updateResult.recordset[0]?.affected) {
+            await transaction
+              .request()
+              .input('userId', sql.Int, userId)
+              .input('roleId', sql.Int, roleId)
+              .query('INSERT INTO dbo.UserRoles (UserId, RoleId, IsActive) VALUES (@userId, @roleId, 1)');
+          }
         }
       }
 

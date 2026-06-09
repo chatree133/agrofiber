@@ -29,6 +29,7 @@ CREATE TABLE dbo.UserRoles (
     UserId INT NOT NULL,
     RoleId INT NOT NULL,
     CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    IsActive BIT NOT NULL DEFAULT 1,
     CONSTRAINT PK_UserRoles PRIMARY KEY (UserId, RoleId),
     CONSTRAINT FK_UserRoles_Users FOREIGN KEY (UserId) REFERENCES dbo.Users(UserId),
     CONSTRAINT FK_UserRoles_Roles FOREIGN KEY (RoleId) REFERENCES dbo.Roles(RoleId)
@@ -89,6 +90,18 @@ CREATE TABLE dbo.DocumentNumberCounters (
     UpdatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT UQ_DocumentNumberCounters UNIQUE (DocumentSeriesId, PeriodKey),
     CONSTRAINT FK_DocumentNumberCounters_DocumentSeries FOREIGN KEY (DocumentSeriesId) REFERENCES dbo.DocumentSeries(DocumentSeriesId)
+);
+
+CREATE TABLE dbo.SmtpSettings (
+    SmtpSettingId INT IDENTITY(1,1) PRIMARY KEY,
+    SmtpHost NVARCHAR(255) NOT NULL,
+    SmtpPort INT NOT NULL DEFAULT 587,
+    SmtpUser NVARCHAR(255) NOT NULL,
+    SmtpPassword NVARCHAR(255) NOT NULL,
+    SmtpSender NVARCHAR(255) NOT NULL,
+    IsActive BIT NOT NULL DEFAULT 1,
+    CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    UpdatedAt DATETIME2 NULL
 );
 
 CREATE TABLE dbo.DocumentStatuses (
@@ -1412,8 +1425,11 @@ CREATE TABLE dbo.WmsWaves (
     Status NVARCHAR(30) NOT NULL DEFAULT 'open',
     CreatedBy INT NOT NULL,
     CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    ActionBy INT NULL,
+    ActionAt DATETIME2 NULL,
     CompletedAt DATETIME2 NULL,
-    CONSTRAINT FK_WmsWaves_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users(UserId)
+    CONSTRAINT FK_WmsWaves_Users FOREIGN KEY (CreatedBy) REFERENCES dbo.Users(UserId),
+    CONSTRAINT FK_WmsWaves_ActionBy FOREIGN KEY (ActionBy) REFERENCES dbo.Users(UserId)
 );
 
 CREATE TABLE dbo.WmsTasks (
@@ -1423,13 +1439,18 @@ CREATE TABLE dbo.WmsTasks (
     ReferenceId INT NULL,
     WarehouseId INT NOT NULL,
     AssignedTo INT NULL,
+    ActionBy INT NULL,
+    ActionAt DATETIME2 NULL,
     Status NVARCHAR(30) NOT NULL DEFAULT 'open',
     CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     CompletedAt DATETIME2 NULL,
+    CompletedBy INT NULL,
     WaveId INT NULL,
     CONSTRAINT FK_WmsTasks_TaskTypes FOREIGN KEY (TaskType) REFERENCES dbo.WmsTaskTypes(TaskTypeCode),
     CONSTRAINT FK_WmsTasks_Warehouses FOREIGN KEY (WarehouseId) REFERENCES dbo.Warehouses(WarehouseId),
     CONSTRAINT FK_WmsTasks_Users FOREIGN KEY (AssignedTo) REFERENCES dbo.Users(UserId),
+    CONSTRAINT FK_WmsTasks_ActionBy FOREIGN KEY (ActionBy) REFERENCES dbo.Users(UserId),
+    CONSTRAINT FK_WmsTasks_CompletedBy FOREIGN KEY (CompletedBy) REFERENCES dbo.Users(UserId),
     CONSTRAINT FK_WmsTasks_WmsWaves FOREIGN KEY (WaveId) REFERENCES dbo.WmsWaves(WmsWaveId)
 );
 
@@ -1446,6 +1467,7 @@ CREATE TABLE dbo.WmsTaskLines (
     QuantityRequired DECIMAL(18,4) NOT NULL,
     QuantityCompleted DECIMAL(18,4) NOT NULL DEFAULT 0,
     Remark NVARCHAR(1000) NULL,
+    PalletNo NVARCHAR(100) NULL,
     CONSTRAINT FK_WmsTaskLines_WmsTasks FOREIGN KEY (WmsTaskId) REFERENCES dbo.WmsTasks(WmsTaskId),
     CONSTRAINT FK_WmsTaskLines_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
     CONSTRAINT FK_WmsTaskLines_ItemSpecs FOREIGN KEY (ItemSpecId) REFERENCES dbo.ItemSpecs(ItemSpecId),
@@ -1455,6 +1477,11 @@ CREATE TABLE dbo.WmsTaskLines (
     CONSTRAINT FK_WmsTaskLines_FromLocations FOREIGN KEY (FromLocationId) REFERENCES dbo.WarehouseLocations(LocationId),
     CONSTRAINT FK_WmsTaskLines_ToLocations FOREIGN KEY (ToLocationId) REFERENCES dbo.WarehouseLocations(LocationId)
 );
+
+-- Helpful indexes for common WMS queries (waves, task lists, wave completion checks)
+CREATE INDEX IX_WmsTasks_WaveId_Status ON dbo.WmsTasks (WaveId, Status);
+CREATE INDEX IX_WmsTasks_WarehouseId_Status ON dbo.WmsTasks (WarehouseId, Status);
+CREATE INDEX IX_WmsWaves_Status ON dbo.WmsWaves (Status);
 
 CREATE TABLE dbo.DocumentStatusHistory (
     DocumentStatusHistoryId BIGINT IDENTITY(1,1) PRIMARY KEY,
@@ -1624,7 +1651,18 @@ CREATE NONCLUSTERED INDEX IX_DiscountRules_Apply ON dbo.DiscountRules
 );
 
 INSERT INTO dbo.Roles (RoleCode, RoleName)
-VALUES ('admin', 'Administrator'), ('accounting', 'Accounting'), ('user', 'User'), ('audit', 'Audit'), ('wms', 'WMS Operator');
+VALUES
+    ('admin', 'Administrator'),
+    ('accounting', 'Accounting'),
+    ('user', 'User'),
+    ('audit', 'Audit'),
+    ('warehouse', 'Warehouse Operator'),
+    ('warehouse_manager', 'Warehouse Manager'),
+    ('inventory', 'Inventory'),
+    ('manager', 'Manager'),
+    ('sales', 'Sales'),
+    ('qc', 'Quality Control'),
+    ('wms', 'WMS Operator');
 
 INSERT INTO dbo.Companies (CompanyCode, CompanyName)
 VALUES ('AGROFIBER', N'Agrofiber');
@@ -1718,6 +1756,16 @@ CROSS JOIN (
         ('VPAY', 'VPAY', 'VPAY-{yyyy}-')
 ) v(DocumentType, SeriesCode, PrefixFormat)
 WHERE b.BranchCode = 'HO';
+
+INSERT INTO dbo.SmtpSettings (SmtpHost, SmtpPort, SmtpUser, SmtpPassword, SmtpSender, IsActive)
+VALUES (
+    'smtp.gmail.com',
+    587,
+    'your-email@gmail.com',
+    'your-app-password',
+    'noreply@agrofiber.com',
+    1
+);
 
 INSERT INTO dbo.WorkflowDefinitions (WorkflowCode, WorkflowName, DocumentType, IsActive)
 VALUES

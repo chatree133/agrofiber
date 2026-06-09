@@ -8,12 +8,14 @@ import Login from './pages/Login.jsx';
 import SalesOrderCreate from './pages/salesOrders/SalesOrderCreate.jsx';
 import SalesOrderList from './pages/salesOrders/SalesOrderList.jsx';
 import Users from './pages/users/Users.jsx';
+import Roles from './pages/users/Roles.jsx';
 import Items from './pages/master/Items.jsx';
 import ItemForm from './pages/master/ItemForm.jsx';
 import Warehouses from './pages/master/Warehouses.jsx';
 import CompanyList from './pages/settings/CompanyList.jsx';
 import CompanyForm from './pages/settings/CompanyForm.jsx';
 import Numbering from './pages/settings/Numbering.jsx';
+import SmtpSettings from './pages/settings/SmtpSettings.jsx';
 import PricingPolicies from './pages/master/PricingPolicies.jsx';
 import PricingPolicyHistory from './pages/master/PricingPolicyHistory.jsx';
 import Customers from './pages/master/Customers.jsx';
@@ -29,6 +31,9 @@ import ApprovalsDashboard from './pages/audit/ApprovalsDashboard.jsx';
 import Receiving from './pages/wms/Receiving.jsx';
 import PickingList from './pages/wms/PickingList.jsx';
 import WavePickingDetail from './pages/wms/WavePickingDetail.jsx';
+import TransferTasks from './pages/wms/TransferTasks.jsx';
+import TransferTaskDetail from './pages/wms/TransferTaskDetail.jsx';
+import WmsDashboard from './pages/wms/WmsDashboard.jsx';
 import DeliveryOrderList from './pages/deliveryorder/DeliveryOrderList.jsx';
 import DeliveryOrderDetail from './pages/deliveryorder/DeliveryOrderDetail.jsx';
 import GoodsIssueList from './pages/inventory/GoodsIssueList.jsx';
@@ -37,6 +42,7 @@ import GoodsIssueDetail from './pages/inventory/GoodsIssueDetail.jsx';
 import GoodsReceiptList from './pages/inventory/GoodsReceiptList.jsx';
 import GoodsReceiptForm from './pages/inventory/GoodsReceiptForm.jsx';
 import GoodsReceiptDetail from './pages/inventory/GoodsReceiptDetail.jsx';
+import InventoryTransfer from './pages/inventory/InventoryTransfer.jsx';
 import TransactionTypes from './pages/master/TransactionTypes.jsx';
 
 function ProtectedRoute({ children }) {
@@ -62,6 +68,7 @@ function AppRoutes() {
         <Route path="salesorder/create" element={<SalesOrderCreate />} />
         <Route path="salesorder/list" element={<SalesOrderList />} />
         <Route path="users" element={<Users />} />
+        <Route path="roles" element={<Roles />} />
         <Route path="master/items" element={<Items />} />
         <Route path="master/items/create" element={<ItemForm />} />
         <Route path="master/items/:id/edit" element={<ItemForm />} />
@@ -90,6 +97,7 @@ function AppRoutes() {
         <Route path="inventory/goods-receipts/create" element={<GoodsReceiptForm />} />
         <Route path="inventory/goods-receipts/:id" element={<GoodsReceiptDetail />} />
         <Route path="inventory/goods-receipts/:id/edit" element={<GoodsReceiptForm />} />
+        <Route path="inventory/transfer" element={<InventoryTransfer />} />
 
         {/* Master Transaction Types */}
         <Route path="master/transaction-types" element={<TransactionTypes />} />
@@ -98,9 +106,12 @@ function AppRoutes() {
         <Route path="audit/approvals" element={<ApprovalsDashboard />} />
         
         {/* WMS Routes */}
+        <Route path="wms/dashboard" element={<WmsDashboard />} />
         <Route path="wms/receiving" element={<Receiving />} />
         <Route path="wms/picking" element={<PickingList />} />
         <Route path="wms/waves/:id" element={<WavePickingDetail />} />
+        <Route path="wms/transfers" element={<TransferTasks />} />
+        <Route path="wms/transfers/:id" element={<TransferTaskDetail />} />
         
         {/* Delivery Order Routes */}
         <Route path="deliveryorder/list" element={<DeliveryOrderList />} />
@@ -110,6 +121,7 @@ function AppRoutes() {
         <Route path="settings/company/create" element={<CompanyForm />} />
         <Route path="settings/company/:id/edit" element={<CompanyForm />} />
         <Route path="settings/numbering" element={<Numbering />} />
+        <Route path="settings/smtp" element={<SmtpSettings />} />
         <Route path="*" element={<GenericPage />} />
       </Route>
     </Routes>

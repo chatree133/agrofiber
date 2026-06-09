@@ -14,7 +14,7 @@ import {
     Switch,
 } from "antd";
 import { useEffect, useState } from "react";
-import ApiClient from "../../context/Api.jsx";
+import { useCompany } from "../../context/CompanyContext.jsx";
 
 const resetFrequencyOptions = [
     { label: "ไม่รีเซ็ต", value: "never" },
@@ -24,6 +24,7 @@ const resetFrequencyOptions = [
 ];
 
 export default function Numbering() {
+    const { getDocumentSeries, updateDocumentSeries } = useCompany();
     const [series, setSeries] = useState([]);
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
@@ -34,10 +35,8 @@ export default function Numbering() {
     const loadSeries = async () => {
         try {
             setLoading(true);
-            const result = await ApiClient.get(
-                "/api/companies/document-series",
-            );
-            setSeries(result.data || []);
+            const data = await getDocumentSeries();
+            setSeries(data || []);
         } catch (err) {
             message.error(
                 err.message || "ไม่สามารถโหลดการตั้งค่าเลขที่เอกสารได้",
@@ -73,10 +72,7 @@ export default function Numbering() {
         try {
             const values = await form.validateFields();
             setSaving(true);
-            await ApiClient.put(
-                `/api/companies/document-series/${editing.documentSeriesId}`,
-                values,
-            );
+            await updateDocumentSeries(editing.documentSeriesId, values);
             message.success("บันทึกการตั้งค่าเลขที่เอกสารสำเร็จ");
             closeModal();
             await loadSeries();

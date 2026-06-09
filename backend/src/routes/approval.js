@@ -51,7 +51,7 @@ router.get('/', asyncHandler(async (req, res) => {
           AND ast.Status = 'pending'
           AND (
             ast.ApproverUserId = @userId
-            OR ast.ApproverRoleId IN (SELECT RoleId FROM dbo.UserRoles WHERE UserId = @userId)
+            OR ast.ApproverRoleId IN (SELECT RoleId FROM dbo.UserRoles WHERE UserId = @userId AND IsActive = 1)
           )
       )
     `);
@@ -65,7 +65,7 @@ router.get('/', asyncHandler(async (req, res) => {
           WHERE ast.ApprovalRequestId = ar.ApprovalRequestId
             AND (
               ast.ApproverUserId = @userId
-              OR ast.ApproverRoleId IN (SELECT RoleId FROM dbo.UserRoles WHERE UserId = @userId)
+              OR ast.ApproverRoleId IN (SELECT RoleId FROM dbo.UserRoles WHERE UserId = @userId AND IsActive = 1)
             )
         )
       )
@@ -98,7 +98,7 @@ router.get('/', asyncHandler(async (req, res) => {
           AND ast.Status = 'pending'
           AND (
             ast.ApproverUserId = @userId
-            OR ast.ApproverRoleId IN (SELECT RoleId FROM dbo.UserRoles WHERE UserId = @userId)
+            OR ast.ApproverRoleId IN (SELECT RoleId FROM dbo.UserRoles WHERE UserId = @userId AND IsActive = 1)
           )
       ) THEN 1 ELSE 0 END AS isPendingForMe
     FROM dbo.ApprovalRequests ar
@@ -151,7 +151,7 @@ router.post('/:id/action', asyncHandler(async (req, res) => {
 
   // หา RoleIds ของ User นี้เพื่อเอาไปเช็คสิทธิ์ (กรณีอนุมัติระดับ Role)
   const roleRes = await mssqlQuery('DEFAULT', `
-    SELECT RoleId FROM dbo.UserRoles WHERE UserId = @userId
+    SELECT RoleId FROM dbo.UserRoles WHERE UserId = @userId AND IsActive = 1
   `, { inputs: { userId: { type: sql.Int, value: userId } } });
   const userRoleIds = roleRes.map(r => r.RoleId);
 
