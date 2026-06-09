@@ -949,4 +949,52 @@ router.post(
   }),
 );
 
+router.post(
+  '/:id/cancel',
+  writeRoles,
+  asyncHandler(async (req, res) => {
+    const userId = getUserId(req);
+    const goodsReceiptId = parseId(req.params.id, 'goodsReceiptId');
+    const notes = req.body?.notes ? String(req.body.notes).trim().slice(0, 1000) : 'Cancelled';
+
+    await mssqlTransaction('DEFAULT', async (tx) => {
+      const reqHeader = new sql.Request(tx);
+      reqHeader.input('grId', sql.Int, goodsReceiptId);
+      const headerRes = await reqHeader.query(`
+        SELECT GoodsReceiptId, Status
+        FROM dbo.GoodsReceipts
+        WHERE GoodsReceiptId = @grId
+      `);
+      const existing = headerRes.recordset[0];
+      if (!existing) throw badRequest('Goods receipt not found');
+      if (existing.Status === 'cancelled') return;
+      if (!['draft', 'received'].includes(existing.Status)) {
+        throw badRequest(`Cannot cancel goods receipt in status: ${existing.Status}`);
+      }
+
+      const upd = new sql.Request(tx);
+      upd.input('grId', sql.Int, goodsReceiptId);
+      await upd.query(`
+        UPDATE dbo.GoodsReceipts
+        SET Status = 'cancelled', UpdatedAt = SYSUTCDATETIME()
+        WHERE GoodsReceiptId = @grId
+      `);
+
+      const histReq = new sql.Request(tx);
+      histReq.input('docId', sql.Int, goodsReceiptId);
+      histReq.input('userId', sql.Int, userId);
+      histReq.input('fromStatus', sql.NVarChar(30), existing.Status);
+      histReq.input('notes', sql.NVarChar(1000), notes);
+      await histReq.query(`
+        INSERT INTO dbo.DocumentStatusHistory (DocumentType, DocumentId, FromStatus, ToStatus, ChangedBy, Notes)
+        VALUES ('GR', @docId, @fromStatus, 'cancelled', @userId, @notes)
+      `);
+    });
+
+    const order = await getGoodsReceipt(goodsReceiptId);
+    const lines = await getGoodsReceiptLines(goodsReceiptId);
+    res.json({ data: { ...order, lines } });
+  }),
+);
+
 export default router;

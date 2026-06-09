@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/auth.js';
 import { allowRoles } from '../middleware/roles.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { goodsIssueService } from '../services/inventory/goodsIssueService.js';
+import { approvalService } from '../services/common/approvalService.js';
 
 const router = Router();
 
@@ -908,6 +909,64 @@ router.post(
     const goodsIssueId = parseId(req.params.id, 'goodsIssueId');
     const result = await inventoryPostingService.postGoodsIssue(goodsIssueId, userId);
     res.json(result);
+  }),
+);
+
+router.post(
+  '/:id/cancel',
+  writeRoles,
+  asyncHandler(async (req, res) => {
+    const userId = getUserId(req);
+    const goodsIssueId = parseId(req.params.id, 'goodsIssueId');
+    const notes = req.body?.notes ? String(req.body.notes).trim().slice(0, 1000) : 'Cancelled';
+
+    await mssqlTransaction('DEFAULT', async (tx) => {
+      const reqHeader = new sql.Request(tx);
+      reqHeader.input('giId', sql.Int, goodsIssueId);
+      const headerRes = await reqHeader.query(`
+        SELECT GoodsIssueId, Status
+        FROM dbo.GoodsIssues
+        WHERE GoodsIssueId = @giId
+      `);
+      const existing = headerRes.recordset[0];
+      if (!existing) throw badRequest('Goods issue not found');
+      if (existing.Status === 'cancelled') return;
+      if (!['draft', 'requested', 'approved'].includes(existing.Status)) {
+        throw badRequest(`Cannot cancel goods issue in status: ${existing.Status}`);
+      }
+
+      const upd = new sql.Request(tx);
+      upd.input('giId', sql.Int, goodsIssueId);
+      await upd.query(`
+        UPDATE dbo.GoodsIssues
+        SET Status = 'cancelled', UpdatedAt = SYSUTCDATETIME()
+        WHERE GoodsIssueId = @giId
+      `);
+
+      const histReq = new sql.Request(tx);
+      histReq.input('docId', sql.Int, goodsIssueId);
+      histReq.input('userId', sql.Int, userId);
+      histReq.input('fromStatus', sql.NVarChar(30), existing.Status);
+      histReq.input('notes', sql.NVarChar(1000), notes);
+      await histReq.query(`
+        INSERT INTO dbo.DocumentStatusHistory (DocumentType, DocumentId, FromStatus, ToStatus, ChangedBy, Notes)
+        VALUES ('GI', @docId, @fromStatus, 'cancelled', @userId, @notes)
+      `);
+
+      await approvalService.cancelActiveRequests('GI', goodsIssueId, tx);
+
+      const cancelTasksReq = new sql.Request(tx);
+      cancelTasksReq.input('giId', sql.Int, goodsIssueId);
+      await cancelTasksReq.query(`
+        UPDATE dbo.WmsTasks
+        SET Status = 'cancelled'
+        WHERE ReferenceType = 'GI' AND ReferenceId = @giId AND Status <> 'completed'
+      `);
+    });
+
+    const order = await getGoodsIssue(goodsIssueId);
+    const lines = await getGoodsIssueLines(goodsIssueId);
+    res.json({ data: { ...order, lines } });
   }),
 );
 

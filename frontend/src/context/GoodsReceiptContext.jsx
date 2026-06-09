@@ -52,6 +52,12 @@ export function GoodsReceiptProvider({ children }) {
     return res.data;
   };
 
+  const cancelGoodsReceipt = async (id, notes = null) => {
+    const payload = notes ? { notes } : {};
+    const res = await ApiClient.post(`/api/goods-receipts/${id}/cancel`, payload, { headers: authHeaders });
+    return res.data;
+  };
+
   const value = useMemo(() => ({
     getGoodsReceipts,
     getGoodsReceipt,
@@ -62,6 +68,7 @@ export function GoodsReceiptProvider({ children }) {
     updateGoodsReceiptType,
     getGoodsReceiptStatusHistory,
     postGoodsReceipt,
+    cancelGoodsReceipt,
   }), [authHeaders]);
 
   return (

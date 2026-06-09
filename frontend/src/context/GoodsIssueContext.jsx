@@ -62,6 +62,12 @@ export function GoodsIssueProvider({ children }) {
     return res.data;
   };
 
+  const cancelGoodsIssue = async (id, notes = null) => {
+    const payload = notes ? { notes } : {};
+    const res = await ApiClient.post(`/api/goods-issues/${id}/cancel`, payload, { headers: authHeaders });
+    return res.data;
+  };
+
   const value = useMemo(() => ({
     getGoodsIssues,
     getGoodsIssue,
@@ -74,6 +80,7 @@ export function GoodsIssueProvider({ children }) {
     requestGoodsIssueApproval,
     approveGoodsIssue,
     postGoodsIssue,
+    cancelGoodsIssue,
   }), [authHeaders]);
 
   return (

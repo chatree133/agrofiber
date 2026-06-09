@@ -248,7 +248,7 @@ export const wmsTaskService = {
       `);
       const task = res.recordset[0];
       if (!task) throw badRequest('WMS Task not found');
-      if (task.Status === 'completed') throw badRequest('WMS Task is already completed');
+      if (['completed', 'cancelled'].includes(task.Status)) throw badRequest(`WMS Task is not available in status: ${task.Status}`);
       if (task.ActionBy && task.ActionBy !== userId) throw badRequest('WMS Task is being handled by another user');
 
       const upd = new sql.Request(tx);
@@ -280,7 +280,7 @@ export const wmsTaskService = {
       `);
       const task = res.recordset[0];
       if (!task) throw badRequest('WMS Task not found');
-      if (task.Status === 'completed') throw badRequest('WMS Task is already completed');
+      if (['completed', 'cancelled'].includes(task.Status)) throw badRequest(`WMS Task is not available in status: ${task.Status}`);
 
       if (!task.ActionBy) return { success: true };
       if (task.ActionBy !== userId && !privileged) throw forbidden('Forbidden: cannot unclaim task owned by another user');
@@ -519,7 +519,7 @@ export const wmsTaskService = {
       `);
       const task = taskRes.recordset[0];
       if (!task) throw badRequest('WMS Task not found');
-      if (task.Status === 'completed') throw badRequest('WMS Task is already completed');
+      if (['completed', 'cancelled'].includes(task.Status)) throw badRequest(`WMS Task is not available in status: ${task.Status}`);
       if (task.ActionBy && task.ActionBy !== userId) throw badRequest('WMS Task is being handled by another user');
 
       // 2. Update each line
@@ -1397,7 +1397,7 @@ export const wmsTaskService = {
       taskReq.input('taskId', sql.BigInt, taskId);
       const taskRes = await taskReq.query(`SELECT Status FROM dbo.WmsTasks WHERE WmsTaskId = @taskId`);
       if (taskRes.recordset.length === 0) throw badRequest('WMS Task not found');
-      if (taskRes.recordset[0].Status === 'completed') throw badRequest('WMS Task is already completed');
+      if (['completed', 'cancelled'].includes(taskRes.recordset[0].Status)) throw badRequest(`WMS Task is not available in status: ${taskRes.recordset[0].Status}`);
 
       // 2. Fetch the target line
       const lineReq = new sql.Request(tx);

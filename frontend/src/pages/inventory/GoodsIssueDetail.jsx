@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { ArrowLeftOutlined, EditOutlined, CheckCircleOutlined, SendOutlined, PlayCircleOutlined, PrinterOutlined } from "@ant-design/icons";
-import { Button, Card, Col, Descriptions, Divider, Row, Space, Table, Tag, Typography, message } from "antd";
+import { ArrowLeftOutlined, EditOutlined, CheckCircleOutlined, SendOutlined, PlayCircleOutlined, PrinterOutlined, StopOutlined } from "@ant-design/icons";
+import { Button, Card, Col, Descriptions, Divider, Modal, Row, Space, Table, Tag, Typography, message } from "antd";
 import { useNavigate, useParams } from "react-router-dom";
 import { useGoodsIssue } from "../../context/GoodsIssueContext.jsx";
 
@@ -9,7 +9,7 @@ const { Title, Paragraph, Text } = Typography;
 export default function GoodsIssueDetail() {
     const { id } = useParams();
     const navigate = useNavigate();
-    const { getGoodsIssue, getGoodsIssueStatusHistory, requestGoodsIssueApproval, approveGoodsIssue, postGoodsIssue } = useGoodsIssue();
+    const { getGoodsIssue, getGoodsIssueStatusHistory, requestGoodsIssueApproval, approveGoodsIssue, postGoodsIssue, cancelGoodsIssue } = useGoodsIssue();
 
     const [loading, setLoading] = useState(false);
     const [goodsIssue, setGoodsIssue] = useState(null);
@@ -73,6 +73,28 @@ export default function GoodsIssueDetail() {
         } finally {
             setActionLoading(false);
         }
+    };
+
+    const handleCancel = () => {
+        Modal.confirm({
+            title: "ยืนยันการยกเลิกใบจ่ายสินค้า",
+            content: "ต้องการยกเลิกเอกสารนี้หรือไม่? (ยังไม่ตัดสต็อก)",
+            okText: "ยกเลิกเอกสาร",
+            okType: "danger",
+            cancelText: "ปิด",
+            onOk: async () => {
+                setActionLoading(true);
+                try {
+                    await cancelGoodsIssue(id);
+                    message.success("ยกเลิกใบจ่ายสินค้าเรียบร้อยแล้ว");
+                    fetchDetails();
+                } catch (err) {
+                    message.error("ยกเลิกล้มเหลว: " + err.message);
+                } finally {
+                    setActionLoading(false);
+                }
+            },
+        });
     };
 
     const getStatusTag = (status) => {
@@ -265,6 +287,17 @@ export default function GoodsIssueDetail() {
                             onClick={handlePostIssue}
                         >
                             โพสต์ตัดยอดจ่ายสินค้าคงคลัง (Post Goods Issue)
+                        </Button>
+                    )}
+
+                    {["draft", "requested", "approved"].includes(goodsIssue.status) && (
+                        <Button
+                            danger
+                            icon={<StopOutlined />}
+                            loading={actionLoading}
+                            onClick={handleCancel}
+                        >
+                            ยกเลิกเอกสาร
                         </Button>
                     )}
 

@@ -713,7 +713,12 @@ export default function WmsDashboard() {
         ];
 
         return (
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <div
+                className="grid gap-3"
+                style={{
+                    gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))",
+                }}
+            >
                 <div
                     className={`wms-dashboard-block ${type === "putaway" ? "opacity-50" : ""}`}
                 >
@@ -828,7 +833,7 @@ export default function WmsDashboard() {
                             loading={loading}
                             pagination={false}
                             rowKey="key"
-                            scroll={{ x: 900, y: 560 }}
+                            scroll={{ y: 560 }}
                             className="wms-dashboard-table"
                             rowClassName={(record) =>
                                 record.key === selectedKey

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { ArrowLeftOutlined, EditOutlined, CheckCircleOutlined, PlayCircleOutlined, PrinterOutlined } from "@ant-design/icons";
-import { Button, Card, Col, Descriptions, Divider, Row, Space, Table, Tag, Typography, message } from "antd";
+import { ArrowLeftOutlined, EditOutlined, CheckCircleOutlined, PlayCircleOutlined, PrinterOutlined, StopOutlined } from "@ant-design/icons";
+import { Button, Card, Col, Descriptions, Divider, Modal, Row, Space, Table, Tag, Typography, message } from "antd";
 import { useNavigate, useParams } from "react-router-dom";
 import { useGoodsReceipt } from "../../context/GoodsReceiptContext.jsx";
 
@@ -9,7 +9,7 @@ const { Title, Paragraph, Text } = Typography;
 export default function GoodsReceiptDetail() {
     const { id } = useParams();
     const navigate = useNavigate();
-    const { getGoodsReceipt, getGoodsReceiptStatusHistory, postGoodsReceipt } = useGoodsReceipt();
+    const { getGoodsReceipt, getGoodsReceiptStatusHistory, postGoodsReceipt, cancelGoodsReceipt } = useGoodsReceipt();
 
     const [loading, setLoading] = useState(false);
     const [goodsReceipt, setGoodsReceipt] = useState(null);
@@ -47,6 +47,28 @@ export default function GoodsReceiptDetail() {
         } finally {
             setActionLoading(false);
         }
+    };
+
+    const handleCancel = () => {
+        Modal.confirm({
+            title: "ยืนยันการยกเลิกใบรับสินค้า",
+            content: "ต้องการยกเลิกเอกสารนี้หรือไม่? (ยังไม่โพสต์เข้าคลัง)",
+            okText: "ยกเลิกเอกสาร",
+            okType: "danger",
+            cancelText: "ปิด",
+            onOk: async () => {
+                setActionLoading(true);
+                try {
+                    await cancelGoodsReceipt(id);
+                    message.success("ยกเลิกใบรับสินค้าเรียบร้อยแล้ว");
+                    fetchDetails();
+                } catch (err) {
+                    message.error("ยกเลิกล้มเหลว: " + err.message);
+                } finally {
+                    setActionLoading(false);
+                }
+            },
+        });
     };
 
     const getStatusTag = (status) => {
@@ -239,11 +261,29 @@ export default function GoodsReceiptDetail() {
                         </Button>
                     )}
 
+                    {["draft", "received"].includes(goodsReceipt.status) && (
+                        <Button
+                            danger
+                            icon={<StopOutlined />}
+                            loading={actionLoading}
+                            onClick={handleCancel}
+                        >
+                            ยกเลิกเอกสาร
+                        </Button>
+                    )}
+
                     {goodsReceipt.status === "posted" && (
                         <Text type="success" strong>
                             <CheckCircleOutlined /> เอกสารโพสต์เข้าคลังและสร้างงาน Putaway ในระบบ WMS สำเร็จแล้ว
                         </Text>
                     )}
+
+                    <Button
+                        icon={<PrinterOutlined />}
+                        onClick={() => window.open(`/document/print?form=GR&docId=${id}`, "_blank")}
+                    >
+                        พิมพ์รายการ (Print)
+                    </Button>
                 </Space>
             </Card>
 

@@ -14,6 +14,7 @@ import CombinedBillingTemplate from './templates/CombinedBillingTemplate';
 import WavePrintTemplate from './templates/WavePrintTemplate';
 import LabelPrintTemplate from './templates/LabelPrintTemplate';
 import GiDocumentTemplate from './templates/GiDocumentTemplate';
+import GrDocumentTemplate from './templates/GrDocumentTemplate';
 import { useDocument } from '../../context/DocumentContext';
 
 export default function DocumentPrint() {
@@ -59,6 +60,7 @@ export default function DocumentPrint() {
     else if (formType === 'DO') prefix = 'ใบส่งสินค้า';
     else if (formType === 'INV') prefix = 'ใบกำกับภาษี';
     else if (formType === 'RCPT') prefix = 'ใบเสร็จรับเงิน';
+    else if (formType === 'GR') prefix = 'ใบรับสินค้า';
     
     return `${prefix}_${docNo}`;
   };
@@ -86,6 +88,8 @@ export default function DocumentPrint() {
           res = await getDeliveryOrderDetail(docId);
         } else if (formType === 'GI') {
           res = await getGoodsIssueDetail(docId);
+        } else if (formType === 'GR') {
+          res = await getGoodsReceiptDetail(docId);
         } else if (formType === 'INV') {
           res = await getSalesInvoiceDetail(docId);
         } else if (formType === 'RCPT') {
@@ -178,6 +182,8 @@ export default function DocumentPrint() {
         return <LabelPrintTemplate docData={docData} lineId={lineId} />;
       case 'GI':
         return <GiDocumentTemplate docData={docData} />;
+      case 'GR':
+        return <GrDocumentTemplate docData={docData} />;
       case 'COMBINED':
         return <CombinedBillingTemplate docData={docData} />;
       default:
