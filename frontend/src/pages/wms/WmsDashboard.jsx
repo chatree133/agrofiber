@@ -581,9 +581,15 @@ export default function WmsDashboard() {
                     </div>
                     <Tag
                         className="wms-dashboard-status"
-                        color={statusColor(h.status)}
+                        color={statusColor(
+                            h.status === "open" && h.actionByName
+                                ? "in_progress"
+                                : h.status,
+                        )}
                     >
-                        {h.status}
+                        {h.status === "open" && h.actionByName
+                            ? "in_progress"
+                            : h.status}
                     </Tag>
                 </div>
 
