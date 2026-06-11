@@ -87,7 +87,7 @@ export const goodsIssueService = {
       const linesReq = new sql.Request(tx);
       linesReq.input('giId', sql.Int, goodsIssueId);
       const linesRes = await linesReq.query(`
-        SELECT ItemId, ItemSpecId, WarehouseId, LocationId, LotId, IssuedQuantity
+        SELECT ItemId, ItemSpecId, UnitId, WarehouseId, LocationId, LotId, RequestedQuantity
         FROM dbo.GoodsIssueLines
         WHERE GoodsIssueId = @giId
       `);
@@ -103,8 +103,9 @@ export const goodsIssueService = {
           lines: lines.map(line => ({
             itemId: line.ItemId,
             itemSpecId: line.ItemSpecId,
+            unitId: line.UnitId,
             lotId: line.LotId,
-            quantityRequired: line.IssuedQuantity,
+            quantityRequired: line.RequestedQuantity,
             fromLocationId: line.LocationId, 
             toLocationId: null
           }))

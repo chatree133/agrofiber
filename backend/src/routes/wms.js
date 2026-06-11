@@ -7,8 +7,9 @@ import { wmsTaskService } from '../services/wms/wmsTaskService.js';
 const router = Router();
 router.use(authenticate);
 
-const readRoles = allowRoles('admin', 'user', 'audit', 'warehouse', 'warehouse_manager');
-const writeRoles = allowRoles('admin', 'warehouse', 'warehouse_manager');
+const readRoles = allowRoles('admin', 'user', 'audit', 'warehouse', 'warehouse_manager', 'wms');
+const writeRoles = allowRoles('admin', 'warehouse', 'warehouse_manager', 'wms');
+const cancelTransferRoles = allowRoles('admin', 'warehouse_manager');
 
 function getUserId(req) {
   const raw = req.user?.sub;
@@ -132,6 +133,16 @@ router.post('/tasks/:id/confirm', writeRoles, asyncHandler(async (req, res) => {
   res.json({ data: updatedTask, message: 'WMS Task confirmed successfully' });
 }));
 
+// Cancel a transfer task (admin/warehouse_manager only)
+router.post('/tasks/:id/cancel', cancelTransferRoles, asyncHandler(async (req, res) => {
+  const taskId = Number(req.params.id);
+  const userId = getUserId(req);
+  const notes = req.body?.notes ? String(req.body.notes).trim() : null;
+  await wmsTaskService.cancelTask({ taskId, userId, notes });
+  const updatedTask = await wmsTaskService.getTaskById(taskId);
+  res.json({ data: updatedTask, message: 'WMS Task cancelled successfully' });
+}));
+
 // Manually generate a task (For API testing or ad-hoc tasks)
 router.post('/tasks', writeRoles, asyncHandler(async (req, res) => {
   const taskId = await wmsTaskService.createTask({
@@ -165,6 +176,21 @@ router.post('/tasks/:taskId/lines/:lineId/split', writeRoles, asyncHandler(async
   await wmsTaskService.splitTaskLine({ taskId, lineId, splitQty, userId });
   const updatedTask = await wmsTaskService.getTaskById(taskId);
   res.json({ data: updatedTask, message: 'WMS Task Line split successfully' });
+}));
+
+// Get WMS / Warehouse Incidents
+router.get('/incidents', readRoles, asyncHandler(async (req, res) => {
+  const incidents = await wmsTaskService.getIncidents(req.query);
+  res.json({ data: incidents });
+}));
+
+// Resolve WMS / Warehouse Incident
+router.post('/incidents/:id/resolve', writeRoles, asyncHandler(async (req, res) => {
+  const incidentId = Number(req.params.id);
+  const userId = getUserId(req);
+  const { action, details } = req.body;
+  await wmsTaskService.resolveIncident({ incidentId, action, userId, details });
+  res.json({ success: true, message: 'Incident resolved successfully' });
 }));
 
 export default router;

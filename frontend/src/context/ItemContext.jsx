@@ -13,9 +13,11 @@ export function ItemProvider({ children }) {
   };
 
   const searchSkus = async (searchVal, page = 1, pageSize = 20) => {
+    const normalizedSearch =
+      typeof searchVal === 'string' ? searchVal.trim() : searchVal;
     const res = await ApiClient.get('/api/items/skus', {
       params: {
-        search: searchVal,
+        search: normalizedSearch ? normalizedSearch : undefined,
         page,
         pageSize
       },
@@ -61,6 +63,16 @@ export function ItemProvider({ children }) {
 
   const deleteItemSpec = async (id, specId) => {
     await ApiClient.delete(`/api/items/${id}/specs/${specId}`, { headers: authHeaders });
+  };
+
+  const getItemConversions = async (id, params = {}) => {
+    const res = await ApiClient.get(`/api/items/${id}/conversions`, { headers: authHeaders, params });
+    return res.data;
+  };
+
+  const createItemConversion = async (id, payload) => {
+    const res = await ApiClient.post(`/api/items/${id}/conversions`, payload, { headers: authHeaders });
+    return res.data;
   };
 
   const createItemPricingPolicy = async (id, payload) => {
@@ -161,6 +173,8 @@ export function ItemProvider({ children }) {
     createItemSpec,
     updateItemSpec,
     deleteItemSpec,
+    getItemConversions,
+    createItemConversion,
     createItemPricingPolicy,
     createItemPricingPoliciesBulk,
     getItemPricingPolicyHistory,

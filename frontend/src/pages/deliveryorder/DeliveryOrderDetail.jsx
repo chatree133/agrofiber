@@ -11,7 +11,7 @@ const { Title, Text, Paragraph } = Typography;
 export default function DeliveryOrderDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { getDeliveryOrderDetail, deliverAndBill, getSalesInvoices } = useDeliveryOrder();
+  const { getDeliveryOrderDetail, deliverAndBill, getSalesInvoices, updateDeliveryOrder } = useDeliveryOrder();
   const { getSalesOrderDetail } = useSalesOrder();
   const { lookups, fetchLookups } = useMasterData();
 
@@ -22,6 +22,36 @@ export default function DeliveryOrderDetail() {
   const [modalOpen, setModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm();
+  
+  // Shipping Edit Modal states
+  const [shippingModalOpen, setShippingModalOpen] = useState(false);
+  const [savingShipping, setSavingShipping] = useState(false);
+  const [shippingForm] = Form.useForm();
+
+  const handleOpenShippingModal = () => {
+    shippingForm.setFieldsValue({
+      deliveryType: deliveryOrder.deliveryType || 'delivery',
+      shipToAddress: deliveryOrder.shipToAddress || '',
+    });
+    setShippingModalOpen(true);
+  };
+
+  const handleSaveShipping = async (values) => {
+    setSavingShipping(true);
+    try {
+      await updateDeliveryOrder(id, {
+        deliveryType: values.deliveryType,
+        shipToAddress: values.shipToAddress,
+      });
+      message.success('แก้ไขข้อมูลการจัดส่งสำเร็จ');
+      setShippingModalOpen(false);
+      fetchDetails();
+    } catch (err) {
+      message.error('ไม่สามารถบันทึกได้: ' + err.message);
+    } finally {
+      setSavingShipping(false);
+    }
+  };
 
   // Calculation states
   const [subTotal, setSubTotal] = useState(0);
@@ -209,12 +239,28 @@ export default function DeliveryOrderDetail() {
         </Col>
 
         <Col span={8}>
-          <Card title="ข้อมูลการขนส่งและเอกสาร" className="shadow-sm">
+          <Card 
+            title="ข้อมูลการขนส่งและเอกสาร" 
+            className="shadow-sm"
+            extra={
+              ['draft', 'ready'].includes(deliveryOrder.Status || deliveryOrder.status) && (
+                <Button size="small" type="link" onClick={handleOpenShippingModal}>
+                  แก้ไขการจัดส่ง
+                </Button>
+              )
+            }
+          >
             <div className="flex flex-col gap-3">
               <div>
                 <Text type="secondary" style={{ marginRight: 8 }} block>สถานะการส่งสินค้า</Text>
-                <Tag color={deliveryOrder.Status === 'closed' ? 'green' : 'orange'} className="mt-1">
-                  {deliveryOrder.Status === 'closed' ? 'ส่งมอบและปิดงานแล้ว' : 'ฉบับร่าง (รอการส่งมอบ)'}
+                <Tag color={(deliveryOrder.Status || deliveryOrder.status) === 'closed' || (deliveryOrder.Status || deliveryOrder.status) === 'delivered' ? 'green' : 'orange'} className="mt-1">
+                  {((deliveryOrder.Status || deliveryOrder.status) === 'closed' || (deliveryOrder.Status || deliveryOrder.status) === 'delivered') ? 'ส่งมอบและปิดงานแล้ว' : 'รอการส่งมอบ'}
+                </Tag>
+              </div>
+              <div>
+                <Text type="secondary" style={{ marginRight: 8 }} block>รูปแบบการจัดส่ง</Text>
+                <Tag color={deliveryOrder.deliveryType === 'pickup' ? 'orange' : 'blue'} className="mt-1">
+                  {deliveryOrder.deliveryType === 'pickup' ? 'รับที่สาขา' : 'จัดส่งสินค้า'}
                 </Tag>
               </div>
               <div>
@@ -327,6 +373,46 @@ export default function DeliveryOrderDetail() {
             <Button onClick={() => setModalOpen(false)}>ยกเลิก</Button>
             <Button type="primary" htmlType="submit" loading={submitting}>
               ยืนยันจัดส่ง & พิมพ์เอกสารทั้งหมด
+            </Button>
+          </div>
+        </Form>
+      </Modal>
+
+      {/* Edit Shipping Details Modal */}
+      <Modal
+        title="แก้ไขรายละเอียดและช่องทางจัดส่ง"
+        open={shippingModalOpen}
+        onCancel={() => !savingShipping && setShippingModalOpen(false)}
+        footer={null}
+        width={450}
+      >
+        <Form
+          form={shippingForm}
+          layout="vertical"
+          onFinish={handleSaveShipping}
+        >
+          <Form.Item
+            name="deliveryType"
+            label="รูปแบบการจัดส่ง/รับสินค้า"
+            rules={[{ required: true, message: 'กรุณาเลือกรูปแบบจัดส่ง' }]}
+          >
+            <Select placeholder="เลือกรูปแบบการจัดส่ง">
+              <Select.Option value="delivery">จัดส่งสินค้า (Delivery)</Select.Option>
+              <Select.Option value="pickup">รับสินค้าที่สาขา (Branch Pickup)</Select.Option>
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            name="shipToAddress"
+            label="ที่อยู่สำหรับจัดส่ง"
+          >
+            <Input.TextArea rows={4} placeholder="ป้อนที่อยู่จัดส่ง..." />
+          </Form.Item>
+
+          <div className="flex justify-end gap-2 mt-4">
+            <Button onClick={() => setShippingModalOpen(false)} disabled={savingShipping}>ยกเลิก</Button>
+            <Button type="primary" htmlType="submit" loading={savingShipping}>
+              บันทึกข้อมูล
             </Button>
           </div>
         </Form>

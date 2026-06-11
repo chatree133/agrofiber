@@ -63,6 +63,8 @@ function mapAddress(row) {
     provinceId: row.ProvinceId,
     postalCode: row.PostalCode,
     countryCode: row.CountryCode,
+    latitude: row.Latitude,
+    longitude: row.Longitude,
     isDefault: Boolean(row.IsDefault),
     isActive: Boolean(row.IsActive),
   };
@@ -475,6 +477,8 @@ router.post(
       provinceId = null,
       postalCode = null,
       countryCode = 'TH',
+      latitude = null,
+      longitude = null,
       isDefault = false,
       isActive = true,
     } = req.body;
@@ -530,6 +534,8 @@ router.post(
         .input('provinceId', sql.Int, provinceId)
         .input('postalCode', sql.NVarChar(20), postalCode)
         .input('countryCode', sql.Char(2), countryCode)
+        .input('latitude', sql.Decimal(18, 10), latitude === '' ? null : latitude)
+        .input('longitude', sql.Decimal(18, 10), longitude === '' ? null : longitude)
         .input('isDefault', sql.Bit, parseBool(isDefault))
         .input('isActive', sql.Bit, parseBool(isActive)).query(`
           INSERT INTO dbo.CustomerAddresses (
@@ -547,6 +553,8 @@ router.post(
             ProvinceId,
             PostalCode,
             CountryCode,
+            Latitude,
+            Longitude,
             IsDefault,
             IsActive
           )
@@ -566,6 +574,8 @@ router.post(
             @provinceId,
             @postalCode,
             @countryCode,
+            @latitude,
+            @longitude,
             @isDefault,
             @isActive
           )
@@ -608,6 +618,8 @@ router.put(
       ['provinceId', 'ProvinceId', sql.Int],
       ['postalCode', 'PostalCode', sql.NVarChar(20)],
       ['countryCode', 'CountryCode', sql.Char(2)],
+      ['latitude', 'Latitude', sql.Decimal(18, 10)],
+      ['longitude', 'Longitude', sql.Decimal(18, 10)],
       ['isDefault', 'IsDefault', sql.Bit],
       ['isActive', 'IsActive', sql.Bit],
     ];
@@ -623,9 +635,17 @@ router.put(
       if (req.body[bodyKey] === undefined || seenColumns.has(column)) return;
       seenColumns.add(column);
       updates.push(`${column} = @${bodyKey}`);
+
+      let val = req.body[bodyKey];
+      if (val === '') {
+        val = null;
+      } else if (column === 'IsDefault' || column === 'IsActive') {
+        val = parseBool(val);
+      }
+
       inputs[bodyKey] = {
         type,
-        value: column === 'IsDefault' || column === 'IsActive' ? parseBool(req.body[bodyKey]) : req.body[bodyKey],
+        value: val,
       };
     });
 

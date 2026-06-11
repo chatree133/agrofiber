@@ -361,7 +361,12 @@ router.post(
         setImmediate(async () => {
             try {
                 // 0. Load Units lookup for mapping
-                const unitRows = await mssqlQuery('DEFAULT', `SELECT UnitId, UnitCode FROM dbo.Units`);
+                const unitRows = await mssqlQuery(
+                    'DEFAULT',
+                    `SELECT UnitId, UnitCode
+                     FROM dbo.Units
+                     WHERE UnitCode IN ('PACK', 'PALLET', 'PCS', 'SHEET')`,
+                );
                 const unitMap = {};
                 unitRows.forEach(u => {
                     unitMap[String(u.UnitCode).toUpperCase().trim()] = u.UnitId;
@@ -407,9 +412,9 @@ router.post(
                                         ? String(row.remark)
                                         : null;
 
-                            // Resolve unitId: map excel UnitCode to UnitId, fallback to default SKU unitId or 1
+                            // Resolve unitId: map excel UnitCode to UnitId, fallback to default SKU unitId or PCS
                             const rawUnitCode = String(row?.unitCode ?? row?.UnitCode ?? row?.unit ?? row?.Unit ?? '').toUpperCase().trim();
-                            const unitId = unitMap[rawUnitCode] || resolved?.UnitId || 1;
+                            const unitId = unitMap[rawUnitCode] || resolved?.UnitId || unitMap.PCS;
 
                             const insertReq = new sql.Request(tx);
                             insertReq.input("itemId", sql.Int, itemId);
@@ -1779,35 +1784,91 @@ router.get(
     readRoles,
     asyncHandler(async (req, res) => {
         const itemId = parseId(req.params.id, "itemId");
-        const rows = await mssqlQuery(
-            "DEFAULT",
-            `
-      SELECT
-        iuc.ItemUnitConversionId,
-        iuc.ItemId,
-        iuc.FromUnitId,
-        fu.UnitCode AS FromUnitCode,
-        fu.UnitName AS FromUnitName,
-        iuc.ToUnitId,
-        tu.UnitCode AS ToUnitCode,
-        tu.UnitName AS ToUnitName,
-        iuc.ConversionFactor,
-        iuc.EffectiveFrom,
-        iuc.EffectiveTo,
-        iuc.IsActive
-      FROM dbo.ItemUnitConversions iuc
-      JOIN dbo.Units fu ON fu.UnitId = iuc.FromUnitId
-      JOIN dbo.Units tu ON tu.UnitId = iuc.ToUnitId
-      WHERE iuc.ItemId = @itemId
-      ORDER BY iuc.EffectiveFrom DESC, fu.UnitCode, tu.UnitCode
-    `,
-            { inputs: { itemId: { type: sql.Int, value: itemId } } },
-        );
+        const itemSpecId = parseOptionalId(req.query.itemSpecId, "itemSpecId");
+        const asOf = new Date();
+
+        const baseSql = `
+          SELECT
+            iuc.ItemUnitConversionId,
+            iuc.ItemId,
+            iuc.ItemSpecId,
+            sp.SalesSKU AS ItemSpecSalesSKU,
+            sp.SpecCode AS ItemSpecCode,
+            sp.SpecName AS ItemSpecName,
+            iuc.FromUnitId,
+            fu.UnitCode AS FromUnitCode,
+            fu.UnitName AS FromUnitName,
+            iuc.ToUnitId,
+            tu.UnitCode AS ToUnitCode,
+            tu.UnitName AS ToUnitName,
+            iuc.ConversionFactor,
+            iuc.EffectiveFrom,
+            iuc.EffectiveTo,
+            iuc.IsActive
+          FROM dbo.ItemUnitConversions iuc
+          JOIN dbo.Units fu ON fu.UnitId = iuc.FromUnitId
+          JOIN dbo.Units tu ON tu.UnitId = iuc.ToUnitId
+          LEFT JOIN dbo.ItemSpecs sp ON sp.ItemSpecId = iuc.ItemSpecId
+          WHERE iuc.ItemId = @itemId
+        `;
+
+        let rows = [];
+        if (itemSpecId) {
+            // Resolved view: prefer item+spec overrides, fallback to item+(NULL spec), as-of today.
+            rows = await mssqlQuery(
+                "DEFAULT",
+                `
+          WITH Candidates AS (
+            ${baseSql}
+            AND (iuc.ItemSpecId = @itemSpecId OR iuc.ItemSpecId IS NULL)
+            AND iuc.IsActive = 1
+            AND iuc.EffectiveFrom <= @asOf
+            AND (iuc.EffectiveTo IS NULL OR iuc.EffectiveTo >= @asOf)
+          ),
+          Ranked AS (
+            SELECT *,
+              ROW_NUMBER() OVER (
+                PARTITION BY FromUnitId, ToUnitId
+                ORDER BY
+                  CASE WHEN ItemSpecId = @itemSpecId THEN 0 ELSE 1 END,
+                  EffectiveFrom DESC,
+                  ItemUnitConversionId DESC
+              ) AS rn
+            FROM Candidates
+          )
+          SELECT *
+          FROM Ranked
+          WHERE rn = 1
+          ORDER BY FromUnitCode, ToUnitCode
+        `,
+                {
+                    inputs: {
+                        itemId: { type: sql.Int, value: itemId },
+                        itemSpecId: { type: sql.Int, value: itemSpecId },
+                        asOf: { type: sql.Date, value: asOf },
+                    },
+                },
+            );
+        } else {
+            // Management view: return all rows for the item
+            rows = await mssqlQuery(
+                "DEFAULT",
+                `
+          ${baseSql}
+          ORDER BY iuc.EffectiveFrom DESC, fu.UnitCode, tu.UnitCode
+        `,
+                { inputs: { itemId: { type: sql.Int, value: itemId } } },
+            );
+        }
 
         res.json({
             data: rows.map((r) => ({
                 id: r.ItemUnitConversionId,
                 itemId: r.ItemId,
+                itemSpecId: r.ItemSpecId ?? null,
+                itemSpecSalesSku: r.ItemSpecSalesSKU ?? null,
+                itemSpecCode: r.ItemSpecCode ?? null,
+                itemSpecName: r.ItemSpecName ?? null,
                 fromUnitId: r.FromUnitId,
                 fromUnitCode: r.FromUnitCode,
                 fromUnitName: r.FromUnitName,
@@ -1828,6 +1889,7 @@ router.post(
     writeRoles,
     asyncHandler(async (req, res) => {
         const itemId = parseId(req.params.id, "itemId");
+        const itemSpecId = parseOptionalId(req.body.itemSpecId, "itemSpecId");
         const fromUnitId = parseId(req.body.fromUnitId, "fromUnitId");
         const toUnitId = parseId(req.body.toUnitId, "toUnitId");
         const conversionFactor = parseOptionalNumber(
@@ -1852,11 +1914,32 @@ router.post(
                 ? null
                 : parseBool(req.body.isActive);
 
+        if (itemSpecId) {
+            const specRes = await mssqlQuery(
+                "DEFAULT",
+                `
+          SELECT ItemSpecId
+          FROM dbo.ItemSpecs
+          WHERE ItemSpecId = @itemSpecId AND ItemId = @itemId
+        `,
+                {
+                    inputs: {
+                        itemSpecId: { type: sql.Int, value: itemSpecId },
+                        itemId: { type: sql.Int, value: itemId },
+                    },
+                },
+            );
+            if (specRes.length === 0) {
+                throw badRequest("itemSpecId does not belong to this item");
+            }
+        }
+
         const rows = await mssqlQuery(
             "DEFAULT",
             `
       INSERT INTO dbo.ItemUnitConversions (
         ItemId,
+        ItemSpecId,
         FromUnitId,
         ToUnitId,
         ConversionFactor,
@@ -1867,6 +1950,7 @@ router.post(
       OUTPUT INSERTED.ItemUnitConversionId
       VALUES (
         @itemId,
+        @itemSpecId,
         @fromUnitId,
         @toUnitId,
         @conversionFactor,
@@ -1878,6 +1962,7 @@ router.post(
             {
                 inputs: {
                     itemId: { type: sql.Int, value: itemId },
+                    itemSpecId: { type: sql.Int, value: itemSpecId },
                     fromUnitId: { type: sql.Int, value: fromUnitId },
                     toUnitId: { type: sql.Int, value: toUnitId },
                     conversionFactor: {

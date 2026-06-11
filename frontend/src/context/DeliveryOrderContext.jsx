@@ -27,11 +27,17 @@ export function DeliveryOrderProvider({ children }) {
     return res;
   };
 
+  const updateDeliveryOrder = async (id, payload) => {
+    const res = await ApiClient.put(`/api/delivery-orders/${id}`, payload, { headers: authHeaders });
+    return res.data;
+  };
+
   const value = useMemo(() => ({
     getDeliveryOrders,
     getDeliveryOrderDetail,
     deliverAndBill,
-    getSalesInvoices
+    getSalesInvoices,
+    updateDeliveryOrder
   }), [authHeaders]);
 
   return (

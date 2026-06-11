@@ -34,6 +34,17 @@ function formatTime(value) {
     return d ? d.toLocaleString("th-TH") : "-";
 }
 
+function isToday(value) {
+    const d = toDate(value);
+    if (!d) return false;
+    const today = new Date();
+    return (
+        d.getDate() === today.getDate() &&
+        d.getMonth() === today.getMonth() &&
+        d.getFullYear() === today.getFullYear()
+    );
+}
+
 function normalize(value) {
     return String(value || "")
         .trim()
@@ -90,8 +101,13 @@ function sumQty(lines = []) {
 }
 
 export default function WmsDashboard() {
-    const { getWmsWaves, getWmsTasks, getWmsWaveDetail, getWmsTaskDetail } =
-        useWms();
+    const {
+        getWmsWaves,
+        getWmsTasks,
+        getWmsWaveDetail,
+        getWmsTaskDetail,
+        getWmsIncidents,
+    } = useWms();
 
     const [loading, setLoading] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
@@ -102,6 +118,7 @@ export default function WmsDashboard() {
     const [detailLoading, setDetailLoading] = useState(false);
     const [detail, setDetail] = useState(null);
     const [search, setSearch] = useState("");
+    const [pendingIncidents, setPendingIncidents] = useState([]);
 
     const [autoRun, setAutoRun] = useState(true);
     const intervalRef = useRef(null);
@@ -115,10 +132,25 @@ export default function WmsDashboard() {
         if (silent) setRefreshing(true);
         else setLoading(true);
         try {
-            const [wavesRes, putawayRes, transferRes] = await Promise.all([
+            const [
+                wavesRes,
+                putawayRes,
+                transferRes,
+                completedWavesRes,
+                completedPutawayRes,
+                completedTransferRes,
+                incidentsRes
+            ] = await Promise.all([
                 getWmsWaves({ status: "open" }),
                 getWmsTasks({ status: "open", taskType: "putaway" }),
                 getWmsTasks({ status: "open", taskType: "transfer" }),
+                getWmsWaves({ status: "completed" }),
+                getWmsTasks({ status: "completed", taskType: "putaway" }),
+                getWmsTasks({ status: "completed", taskType: "transfer" }),
+                getWmsIncidents({ status: "pending" }).catch((err) => {
+                    console.error("Failed to fetch pending incidents:", err);
+                    return [];
+                }),
             ]);
 
             const waves = (wavesRes?.data || []).map((w) => ({
@@ -159,15 +191,58 @@ export default function WmsDashboard() {
                         : "-",
                 }));
 
-            const merged = [...waves, ...tasks]
+            const activeSorted = [...waves, ...tasks]
                 .sort(
                     (a, b) =>
                         deriveSortTime(b).getTime() -
                         deriveSortTime(a).getTime(),
+                );
+
+            const compWaves = (completedWavesRes?.data || []).map((w) => ({
+                key: `wave:${w.id}`,
+                type: "wave",
+                id: w.id,
+                code: w.waveNo,
+                status: w.status,
+                createdAt: w.createdAt,
+                actionAt: w.actionAt,
+                completedAt: w.completedAt,
+                actionByName: w.actionByName,
+                createdByName: w.createdByName,
+                summary: `${w.taskCount || 0} งาน`,
+            }));
+
+            const compTasks = (completedPutawayRes?.data || [])
+                .concat(completedTransferRes?.data || [])
+                .map((t) => ({
+                    key: `task:${t.id}`,
+                    type: t.taskType,
+                    id: t.id,
+                    code: `Task #${t.id}`,
+                    status: t.status,
+                    createdAt: t.createdAt,
+                    actionAt: t.actionAt,
+                    completedAt: t.completedAt,
+                    actionByName: t.actionByName,
+                    createdByName: null,
+                    summary: t.referenceType
+                        ? `${t.referenceType} (${t.referenceId ?? "-"})`
+                        : "-",
+                }));
+
+            const completedToday = [...compWaves, ...compTasks]
+                .filter((r) => isToday(r.completedAt))
+                .sort(
+                    (a, b) =>
+                        new Date(b.completedAt || b.actionAt || b.createdAt).getTime() -
+                        new Date(a.completedAt || a.actionAt || a.createdAt).getTime(),
                 )
-                .slice(0, 150);
+                .slice(0, 10);
+
+            const merged = [...activeSorted, ...completedToday];
 
             setRows(merged);
+            setPendingIncidents(incidentsRes || []);
             setLastUpdatedAt(new Date().toISOString());
 
             if (merged.length) {
@@ -447,6 +522,8 @@ export default function WmsDashboard() {
                         itemName: l.itemName,
                         qty: Number(l.quantityRequired || 0),
                         uom: "แผ่น",
+                        ruom: l.requestedUnitName,
+                        rqty: Number(l.requestedQuantity || 0),
                         from: l.fromLocationCode,
                         to: l.toLocationCode,
                         pallet: l.palletNo,
@@ -464,6 +541,8 @@ export default function WmsDashboard() {
                     from: l.fromLocationCode,
                     to: l.toLocationCode,
                     pallet: l.palletNo,
+                    ruom: l.requestedUnitName,
+                    rqty: Number(l.requestedQuantity || 0),
                 });
             });
         }
@@ -476,6 +555,7 @@ export default function WmsDashboard() {
                 itemName: l.itemName,
                 qty: 0,
                 uom: l.uom || "-",
+                // ruom: `${l.rqty} ${l.ruom}` || "-",
             };
             prev.qty += Number(l.qty || 0);
             itemAgg.set(k, prev);
@@ -552,14 +632,14 @@ export default function WmsDashboard() {
                                         <UserOutlined />
                                     ) : undefined
                                 }
-                                style={
-                                    !h.actionByAvatarUrl
-                                        ? {
-                                              backgroundColor: "#334155",
-                                              color: "#cbd5e1",
-                                          }
-                                        : undefined
-                                }
+                                style={{
+                                    flexShrink: 0,
+                                    minWidth: 44,
+                                    minHeight: 44,
+                                    backgroundColor: !h.actionByAvatarUrl ? "#334155" : undefined,
+                                    color: !h.actionByAvatarUrl ? "#cbd5e1" : undefined,
+                                }}
+                                imgStyle={{ objectFit: 'cover' }}
                             />
                         </Tooltip>
                         <div className="flex flex-col gap-1">
@@ -615,7 +695,7 @@ export default function WmsDashboard() {
                 title: "SKU | ชื่อสินค้า",
                 dataIndex: "itemCode",
                 key: "itemCode",
-                width: 240,
+                width: 230,
                 render: (t, r) => (
                     <div>
                         <Text className="wms-dashboard-text" strong>
@@ -650,6 +730,15 @@ export default function WmsDashboard() {
                     <Text className="wms-dashboard-muted">{t || "-"}</Text>
                 ),
             },
+            // {
+            //     title: "Req.",
+            //     dataIndex: "ruom",
+            //     key: "ruom",
+            //     width: 50,
+            //     render: (t) => (
+            //         <Text className="wms-dashboard-muted">{t}</Text>
+            //     ),
+            // },
         ];
         return (
             <div className="wms-dashboard-block">
@@ -765,8 +854,10 @@ export default function WmsDashboard() {
         );
     }, [derivedDetail]);
 
+    const hasIncidents = pendingIncidents.length > 0;
+
     return (
-        <div className="wms-dashboard flex flex-col gap-4">
+        <div className={`wms-dashboard flex flex-col gap-4 ${hasIncidents ? "pb-16" : ""}`}>
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div className="flex flex-col">
                     <h1 className="text-lg font-semibold wms-dashboard-text">
@@ -779,8 +870,8 @@ export default function WmsDashboard() {
                         อัปเดตล่าสุด:{" "}
                         {lastUpdatedAt
                             ? new Date(lastUpdatedAt).toLocaleTimeString(
-                                  "th-TH",
-                              )
+                                "th-TH",
+                            )
                             : "-"}{" "}
                         {refreshing ? " (กำลังรีเฟรช...)" : ""}
                     </Text>
@@ -873,6 +964,20 @@ export default function WmsDashboard() {
                     </div>
                 </Card>
             </div>
+
+            {hasIncidents && (
+                <div className="wms-incident-ticker">
+                    <div className="wms-incident-ticker-content">
+                        {Array.from({ length: Math.ceil(8 / pendingIncidents.length) })
+                            .flatMap(() => pendingIncidents)
+                            .map((inc, index) => (
+                                <span key={`${inc.id}-${index}`} className="wms-incident-ticker-item">
+                                    [{formatTime(inc.createdAt)}] ⚠️ แจ้งเตือน!  ({(index % pendingIncidents.length) + 1}): พบปัญหา {inc.incidentType.toUpperCase().replace(/_/g, ' ')} ที่ใบงาน {inc.sourceType.toUpperCase()} {inc.sourceId || inc.wmsTaskId} กรุณาตรวจสอบอีกครั้ง,
+                                </span>
+                            ))}
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

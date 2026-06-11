@@ -6,6 +6,7 @@ import {
     FileExcelOutlined,
     SearchOutlined,
     ArrowLeftOutlined,
+    CompassOutlined,
 } from "@ant-design/icons";
 import {
     Button,
@@ -62,6 +63,8 @@ export default function CustomerForm() {
     const [searchAddressText, setSearchAddressText] = useState("");
     const [addressModalOpen, setAddressModalOpen] = useState(false);
     const [editingAddress, setEditingAddress] = useState(null);
+    const addressLat = Form.useWatch("latitude", addressForm);
+    const addressLng = Form.useWatch("longitude", addressForm);
 
     // Contacts
     const [contacts, setContacts] = useState([]);
@@ -792,6 +795,28 @@ export default function CustomerForm() {
                         <Form.Item name="districtId" hidden><Input /></Form.Item>
                         <Form.Item name="provinceId" hidden><Input /></Form.Item>
                     </div>
+                    <div className="grid grid-cols-1 gap-x-6 md:grid-cols-2">
+                        <Form.Item name="latitude" label="ละติจูด (Latitude)">
+                            <Input placeholder="เช่น 13.7563" />
+                        </Form.Item>
+                        <Form.Item name="longitude" label="ลองจิจูด (Longitude)">
+                            <Input placeholder="เช่น 100.5018" />
+                        </Form.Item>
+                    </div>
+                    {addressLat && addressLng && (
+                        <div style={{ marginBottom: 16 }}>
+                            <Button
+                                type="link"
+                                href={`https://www.google.com/maps?q=${addressLat},${addressLng}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                icon={<CompassOutlined />}
+                                style={{ padding: 0 }}
+                            >
+                                เปิดแผนที่ Google Maps ({addressLat}, {addressLng})
+                            </Button>
+                        </div>
+                    )}
                     <div className="grid grid-cols-1 gap-x-6 md:grid-cols-2">
                         <Form.Item
                             name="isDefault"

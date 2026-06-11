@@ -52,7 +52,10 @@ export const costingService = {
     const availableLayers = layersRes.recordset;
 
     for (const layer of availableLayers) {
-      if (remainingToIssue <= 0) break;
+      if (remainingToIssue < 1e-5) {
+        remainingToIssue = 0;
+        break;
+      }
 
       const qtyToTake = Math.min(layer.QuantityRemaining, remainingToIssue);
       remainingToIssue -= qtyToTake;
@@ -68,7 +71,7 @@ export const costingService = {
       `);
     }
 
-    if (remainingToIssue > 0) {
+    if (remainingToIssue > 1e-5) {
       throw new Error(`Insufficient stock or layers for Item ID ${itemId}. Short by ${remainingToIssue}`);
     }
 

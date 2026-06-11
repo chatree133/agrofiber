@@ -30,7 +30,7 @@ export const salesOrderService = {
       const linesReq = new sql.Request(tx);
       linesReq.input('salesOrderId', sql.Int, salesOrderId);
       const linesRes = await linesReq.query(`
-        SELECT ItemId, ItemSpecId, Quantity, UnitId, UnitPrice
+        SELECT SalesOrderLineId, ItemId, ItemSpecId, Quantity, UnitId, UnitPrice
         FROM dbo.SalesOrderLines
         WHERE SalesOrderId = @salesOrderId
       `);
@@ -66,7 +66,9 @@ export const salesOrderService = {
           dbLines.push({
               ItemId: line.ItemId,
               ItemSpecId: line.ItemSpecId,
+              SalesOrderLineId: line.SalesOrderLineId,
               Quantity: line.Quantity,
+              UnitId: line.UnitId,
               Remark: line.Remark || line.remark || null
           });
       }
@@ -144,15 +146,16 @@ export const salesOrderService = {
             assignedTo: null,
             lines: dbLines.map(line => {
               const res = reservations.find(r => r.ItemId === line.ItemId && (r.ItemSpecId === line.ItemSpecId || (!r.ItemSpecId && !line.ItemSpecId)));
-              return {
-                itemId: line.ItemId,
-                itemSpecId: line.ItemSpecId,
-                quantityRequired: line.Quantity,
-                remark: line.Remark || null,
-                inventoryReservationId: res ? res.InventoryReservationId : null,
-                fromLocationId: null,
-                toLocationId: null
-              };
+	              return {
+	                itemId: line.ItemId,
+	                itemSpecId: line.ItemSpecId,
+	                unitId: line.UnitId,
+	                quantityRequired: line.Quantity,
+	                remark: line.Remark || null,
+	                inventoryReservationId: res ? res.InventoryReservationId : null,
+	                fromLocationId: null,
+	                toLocationId: null
+	              };
             })
           }, tx);
 
@@ -180,12 +183,12 @@ export const salesOrderService = {
       const linesReq = new sql.Request(tx);
       linesReq.input('salesOrderId', sql.Int, salesOrderId);
       const linesRes = await linesReq.query(`
-        SELECT
-          SalesOrderLineId, ItemId, ItemSpecId, Quantity, Remark
-        FROM dbo.SalesOrderLines
-        WHERE SalesOrderId = @salesOrderId
-        ORDER BY LineNum
-      `);
+	        SELECT
+	          SalesOrderLineId, ItemId, ItemSpecId, UnitId, Quantity, Remark
+	        FROM dbo.SalesOrderLines
+	        WHERE SalesOrderId = @salesOrderId
+	        ORDER BY LineNum
+	      `);
       const lines = linesRes.recordset;
 
       if (lines.length === 0) throw badRequest('Cannot approve sales order without lines');
@@ -243,15 +246,16 @@ export const salesOrderService = {
         assignedTo: null,
         lines: lines.map(line => {
           const res = reservations.find(r => r.ItemId === line.ItemId && (r.ItemSpecId === line.ItemSpecId || (!r.ItemSpecId && !line.ItemSpecId)));
-          return {
-            itemId: line.ItemId,
-            itemSpecId: line.ItemSpecId,
-            quantityRequired: line.Quantity,
-            remark: line.Remark || null,
-            inventoryReservationId: res ? res.InventoryReservationId : null,
-            fromLocationId: null, // Let the picker decide or system suggest
-            toLocationId: null    // Usually staging area for shipping
-          };
+	          return {
+	            itemId: line.ItemId,
+	            itemSpecId: line.ItemSpecId,
+	            unitId: line.UnitId,
+	            quantityRequired: line.Quantity,
+	            remark: line.Remark || null,
+	            inventoryReservationId: res ? res.InventoryReservationId : null,
+	            fromLocationId: null, // Let the picker decide or system suggest
+	            toLocationId: null    // Usually staging area for shipping
+	          };
         })
       }, tx);
 

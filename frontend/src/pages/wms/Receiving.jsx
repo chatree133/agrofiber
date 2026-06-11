@@ -7,6 +7,23 @@ import { useAuth } from '../../context/AuthContext.jsx';
 
 const { Title, Text } = Typography;
 
+function formatTaskQuantity(line) {
+  const baseQty = Number(line?.quantityRequired || 0).toLocaleString('th-TH');
+  const baseUnit = line?.unitCode || 'PCS';
+  const requestedQty = line?.requestedQuantity;
+  const requestedUnit = line?.requestedUnitCode;
+
+  if (
+    requestedQty != null &&
+    requestedUnit &&
+    (requestedUnit !== baseUnit || Number(requestedQty) !== Number(line?.quantityRequired || 0))
+  ) {
+    return `${Number(requestedQty || 0).toLocaleString('th-TH')} ${requestedUnit} (${baseQty} ${baseUnit})`;
+  }
+
+  return `${baseQty} ${baseUnit}`;
+}
+
 export default function Receiving() {
   const { user } = useAuth();
   const currentUserId = user?.id;
@@ -426,13 +443,13 @@ export default function Receiving() {
           loading={loading && !isModalVisible}
           pagination={false}
           scroll={{ x: 1200 }}
-          locale={{ emptyText: 'ไม่พบรายการงานรับเข้าที่รอจัดเก็บ' }}
+          // locale={{ emptyText: 'ไม่พบรายการงานรับเข้าที่รอจัดเก็บ' }}
           className="rounded-lg overflow-hidden border border-slate-50 border-t-0"
         />
       </Card>
 
       {/* Putaway Confirmation Modal */}
-	      <Modal
+      <Modal
         title={
           <div className="border-b border-slate-100 pb-3 flex items-center gap-2">
             <AppstoreOutlined className="text-indigo-600 text-lg" />
@@ -441,39 +458,39 @@ export default function Receiving() {
             </span>
           </div>
         }
-	        open={isModalVisible}
-	        onCancel={() => setIsModalVisible(false)}
-	        confirmLoading={confirmLoading}
-	        width={950}
-	        okText="ยืนยันจัดเก็บเข้าคลังทั้งหมด"
-	        cancelText="ยกเลิก"
+        open={isModalVisible}
+        onCancel={() => setIsModalVisible(false)}
+        confirmLoading={confirmLoading}
+        width={950}
+        okText="ยืนยันจัดเก็บเข้าคลังทั้งหมด"
+        cancelText="ยกเลิก"
         okButtonProps={{
           className: "bg-indigo-600 hover:bg-indigo-700 border-none px-5 rounded-md",
         }}
-	        cancelButtonProps={{
-	          className: "rounded-md",
-	        }}
-          footer={
-            <Space className="w-full justify-end">
-              <Button onClick={() => setIsModalVisible(false)}>
-                ยกเลิก
+        cancelButtonProps={{
+          className: "rounded-md",
+        }}
+        footer={
+          <Space className="w-full justify-end">
+            <Button onClick={() => setIsModalVisible(false)}>
+              ยกเลิก
+            </Button>
+            {selectedTask?.actionBy && (selectedTask.actionBy === currentUserId || canForceUnclaim) ? (
+              <Button danger onClick={() => handleUnclaimTask(selectedTask.id)} disabled={confirmLoading}>
+                Unclaim
               </Button>
-              {selectedTask?.actionBy && (selectedTask.actionBy === currentUserId || canForceUnclaim) ? (
-                <Button danger onClick={() => handleUnclaimTask(selectedTask.id)} disabled={confirmLoading}>
-                  Unclaim
-                </Button>
-              ) : null}
-              <Button
-                type="primary"
-                onClick={handleConfirmPutaway}
-                loading={confirmLoading}
-                className="bg-indigo-600 hover:bg-indigo-700 border-none px-5 rounded-md"
-              >
-                ยืนยันจัดเก็บเข้าคลังทั้งหมด
-              </Button>
-            </Space>
-          }
-	      >
+            ) : null}
+            <Button
+              type="primary"
+              onClick={handleConfirmPutaway}
+              loading={confirmLoading}
+              className="bg-indigo-600 hover:bg-indigo-700 border-none px-5 rounded-md"
+            >
+              ยืนยันจัดเก็บเข้าคลังทั้งหมด
+            </Button>
+          </Space>
+        }
+      >
         <div ref={modalContentRef} className="py-4 flex flex-col gap-4 max-h-[60vh] overflow-y-auto pr-1">
           <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 flex flex-col md:flex-row justify-between gap-3 text-sm">
             <div>
@@ -516,7 +533,7 @@ export default function Receiving() {
                   <Col xs={12} md={6}>
                     <div className="flex flex-col gap-1">
                       <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">จำนวนจัดเก็บ (จาก Staging)</span>
-                      <Tag color="cyan" className="font-semibold text-xs py-0.5 m-0 w-fit">{line.quantityRequired} แผ่น</Tag>
+                      <Tag color="cyan" className="font-semibold text-xs py-0.5 m-0 w-fit">{formatTaskQuantity(line)}</Tag>
                     </div>
                   </Col>
 

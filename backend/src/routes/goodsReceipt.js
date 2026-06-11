@@ -5,6 +5,7 @@ import { documentService } from '../services/common/documentService.js';
 import { authenticate } from '../middleware/auth.js';
 import { allowRoles } from '../middleware/roles.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
+import { unitConversionService } from '../services/inventory/unitConversionService.js';
 
 const router = Router();
 
@@ -311,6 +312,18 @@ function calculateHeaderTotals(lines) {
   }
 
   return { receivedSheetTotal, palletCountTotal, m3Total };
+}
+
+async function applyConversionQuantities(tx, lines) {
+  for (const line of lines) {
+    const conversion = await unitConversionService.convertToItemBase(tx, {
+      itemId: line.itemId,
+      itemSpecId: line.itemSpecId,
+      fromUnitId: line.unitId,
+      quantity: line.receivedQuantity,
+    });
+    line.receivedSheetQty = conversion.baseQuantity;
+  }
 }
 
 async function resolveLineLots(tx, lineSnapshots, userId) {
@@ -669,11 +682,12 @@ router.post(
     const status = normalizeEnum(req.body.status, ['draft', 'received'], 'status') || 'draft';
 
     const lineSnapshots = buildLineSnapshots(req.body.lines);
-    const totals = calculateHeaderTotals(lineSnapshots);
 
     let goodsReceiptId;
     try {
       await mssqlTransaction('DEFAULT', async (tx) => {
+        await applyConversionQuantities(tx, lineSnapshots);
+        const totals = calculateHeaderTotals(lineSnapshots);
         const documentNo = await documentService.generateDocumentNumber(tx, 'GR', branchId, receiptDate);
 
         const headerReq = new sql.Request(tx);
@@ -798,9 +812,12 @@ router.put(
 
     const replaceLines = req.body.lines !== undefined;
     const lineSnapshots = replaceLines ? buildLineSnapshots(req.body.lines) : null;
-    const totals = lineSnapshots ? calculateHeaderTotals(lineSnapshots) : null;
 
     await mssqlTransaction('DEFAULT', async (tx) => {
+      if (lineSnapshots) {
+        await applyConversionQuantities(tx, lineSnapshots);
+      }
+      const totals = lineSnapshots ? calculateHeaderTotals(lineSnapshots) : null;
       const updateReq = new sql.Request(tx);
       updateReq.input('goodsReceiptId', sql.Int, goodsReceiptId);
       updateReq.input('goodsReceiptTypeId', sql.Int, goodsReceiptTypeId);

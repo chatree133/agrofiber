@@ -15,8 +15,13 @@ export default function Login() {
   const onFinish = async (values) => {
     setLoading(true);
     try {
-      await login(values.username, values.password);
-      navigate('/dashboard');
+      const user =  await login(values.username, values.password);
+      console.log('Logged in user:', user);
+      if (user.roles.includes('wms') && user.roles.length === 1) {
+        navigate('/wms/dashboard');
+      }else{
+        navigate('/dashboard');
+      }
     } catch (error) {
       message.error(error?.message || 'เข้าสู่ระบบไม่สำเร็จ');
     } finally {

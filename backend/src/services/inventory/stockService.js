@@ -56,7 +56,7 @@ export const stockService = {
     req.input('qty', sql.Decimal(18, 4), quantityDelta);
 
     await req.query(`
-      MERGE dbo.StockOnHand AS target
+      MERGE dbo.StockOnHand WITH (HOLDLOCK) AS target
       USING (SELECT @itemId AS ItemId, @itemSpecId AS ItemSpecId, @whId AS WarehouseId, @locId AS LocationId, @lotId AS LotId, @lotNo AS LotNo) AS source
       ON (target.ItemId = source.ItemId 
           AND ISNULL(target.ItemSpecId, -1) = ISNULL(source.ItemSpecId, -1)

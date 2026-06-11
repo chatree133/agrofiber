@@ -9,6 +9,23 @@ import { useAuth } from '../../context/AuthContext.jsx';
 
 const { Title, Text, Paragraph } = Typography;
 
+function formatTaskQuantity(line) {
+  const baseQty = Number(line?.quantityRequired || 0).toLocaleString('th-TH');
+  const baseUnit = line?.unitCode || 'PCS';
+  const requestedQty = line?.requestedQuantity;
+  const requestedUnit = line?.requestedUnitCode;
+
+  if (
+    requestedQty != null &&
+    requestedUnit &&
+    (requestedUnit !== baseUnit || Number(requestedQty) !== Number(line?.quantityRequired || 0))
+  ) {
+    return `${Number(requestedQty || 0).toLocaleString('th-TH')} ${requestedUnit} (${baseQty} ${baseUnit})`;
+  }
+
+  return `${baseQty} ${baseUnit}`;
+}
+
 export default function WavePickingDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -149,7 +166,7 @@ export default function WavePickingDetail() {
     const inputs = lineInputs[line.id] || {};
     setActivePickingLine(line);
     setPickedLocationCode(inputs.scannedLocationCode || '');
-    setPickedPalletNo(inputs.palletNo || '');
+    setPickedPalletNo(inputs.isPicked ? (inputs.palletNo || '') : '');
     setPickedQty(inputs.qtyCompleted || line.quantityRequired);
     setPickedCondition(inputs.condition || 'good');
     setOverrideActive(false);
@@ -297,7 +314,8 @@ export default function WavePickingDetail() {
             fromLocationId: inputs.locationId || null,
             toLocationId: line.toLocationId || null,
             inventoryUnitId: line.inventoryUnitId || null,
-            palletNo: inputs.palletNo || null
+            palletNo: inputs.palletNo || null,
+            condition: inputs.condition || 'good'
           };
         });
 
@@ -447,7 +465,7 @@ export default function WavePickingDetail() {
       width: 120,
       dataIndex: 'quantityRequired',
       key: 'quantityRequired',
-      render: (qty) => <Text>{qty} แผ่น</Text>
+      render: (_, r) => <Text>{formatTaskQuantity(r)}</Text>
     },
     {
       title: 'จำนวนหยิบจริง',
@@ -548,7 +566,7 @@ export default function WavePickingDetail() {
             onClick={() => window.open(`/document/print?form=WAVE&docId=${wave.id}`, '_blank')}
             className="hidden sm:inline-flex"
           >
-            พิมพ์ใบจัดกลุ่มหยิบสินค้า
+            พิมพ์ใบจัดกลุ่มฯ
           </Button>
           {wave.status !== 'completed' && (
             <>
@@ -576,7 +594,7 @@ export default function WavePickingDetail() {
                 disabled={isClaimedByOther}
                 className="hidden sm:inline-flex"
               >
-                คำนวณตำแหน่งใหม่ (Re-allocate)
+                คำนวณตำแหน่งใหม่
               </Button>
               <Button
                 icon={<UndoOutlined />}
@@ -789,7 +807,7 @@ export default function WavePickingDetail() {
                 style={{ textAlign: 'center' }}
               />
               <div className="text-xs text-slate-400 text-right">
-                จำนวนที่ต้องการ: {activePickingLine.quantityRequired} แผ่น
+                จำนวนที่ต้องการ: {formatTaskQuantity(activePickingLine)}
               </div>
             </div>
 

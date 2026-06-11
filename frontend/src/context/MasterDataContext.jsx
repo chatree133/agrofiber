@@ -18,10 +18,31 @@ export function MasterDataProvider({ children }) {
     }
   }, [authHeaders]);
 
+  const getUnits = useCallback(async () => {
+    if (!authHeaders) return [];
+    const res = await ApiClient.get('/api/master-data/units', { headers: authHeaders });
+    return res.data || [];
+  }, [authHeaders]);
+
+  const createUnit = useCallback(async (payload) => {
+    if (!authHeaders) return;
+    const res = await ApiClient.post('/api/master-data/units', payload, { headers: authHeaders });
+    return res.data;
+  }, [authHeaders]);
+
+  const updateUnit = useCallback(async (id, payload) => {
+    if (!authHeaders) return;
+    const res = await ApiClient.put(`/api/master-data/units/${id}`, payload, { headers: authHeaders });
+    return res.data;
+  }, [authHeaders]);
+
   const value = useMemo(() => ({
     lookups,
-    fetchLookups
-  }), [lookups, fetchLookups]);
+    fetchLookups,
+    getUnits,
+    createUnit,
+    updateUnit
+  }), [lookups, fetchLookups, getUnits, createUnit, updateUnit]);
 
   return (
     <MasterDataContext.Provider value={value}>

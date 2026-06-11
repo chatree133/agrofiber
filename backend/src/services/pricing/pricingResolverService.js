@@ -1,4 +1,5 @@
 import { sql, getMssqlPool } from "../../lib/mssql.js";
+import { unitConversionService } from "../inventory/unitConversionService.js";
 import { calculateMargin, calculateMarkup } from "./pricingUtils.js";
 
 function buildPricingResult(data = {}) {
@@ -112,12 +113,24 @@ export const pricingResolverService = {
             return customerPrice;
         }
 
+        const segmentPrice = await this.findCustomerSegmentPrice(context, tx);
+        console.log("segmentPrice", segmentPrice);
+        if (segmentPrice) {
+            return segmentPrice;
+        }
+
         const priceListPrice = await this.findPriceListPrice(context, tx);
         console.log("priceListPrice", priceListPrice);
         if (priceListPrice) {
             // return this.applyPricingMethod(priceListPrice);
             // เช่นเดียวกับ contractPrice และ customerPrice ฉันจะคุมว่่า ราคาที่ได้จาก priceListPrice UnitPrice คือราคาหลังจากที่ถูกปรับด้วยวิธีการต่างๆ ตามที่กำหนดในรายการราคาแล้ว ดังนั้นจะ return ทันทีโดยไม่ต้องผ่าน applyPricingMethod อีกครั้ง เพราะมันจะทำให้ราคาที่ได้ผิดพลาดได้ถ้า applyPricingMethod ถูกใช้ซ้ำอีกครั้งกับราคาที่ผ่านการปรับมาแล้ว
             return priceListPrice;
+        }
+
+        const standardBaseUnitPrice = await this.findStandardBaseUnitFallbackPrice(context, tx);
+        console.log("standardBaseUnitPrice", standardBaseUnitPrice);
+        if (standardBaseUnitPrice) {
+            return standardBaseUnitPrice;
         }
 
         throw new Error(`Price not found for ItemId=${context.itemId}`);
@@ -243,10 +256,7 @@ export const pricingResolverService = {
                         OR cpcl.ItemSpecId = @ItemSpecId
                     )
 
-                    AND (
-                        cpcl.UnitId IS NULL
-                        OR cpcl.UnitId = @UnitId
-                    )
+                    AND cpcl.UnitId = @UnitId
 
                     AND @Quantity >=
                         ISNULL(cpcl.MinQuantity, 0)
@@ -368,10 +378,123 @@ export const pricingResolverService = {
                         OR pli.ItemSpecId = @ItemSpecId
                     )
 
+                    AND pli.UnitId = @UnitId
+
+                    AND @Quantity >=
+                        ISNULL(pli.MinQuantity, 0)
+
                     AND (
-                        pli.UnitId IS NULL
-                        OR pli.UnitId = @UnitId
+                        pli.MaxQuantity IS NULL
+                        OR @Quantity <= pli.MaxQuantity
                     )
+
+                    AND (
+                        pli.EffectiveFrom IS NULL
+                        OR pli.EffectiveFrom <= @DocumentDate
+                    )
+
+                    AND (
+                        pli.EffectiveTo IS NULL
+                        OR pli.EffectiveTo >= @DocumentDate
+                    )
+
+                    AND pl.IsActive = 1
+
+                ORDER BY
+                    CASE
+                        WHEN pli.ItemSpecId = @ItemSpecId THEN 0
+                        WHEN pli.ItemSpecId IS NULL THEN 1
+                        ELSE 2
+                    END,
+                    pl.Priority DESC,
+                    pli.MinQuantity DESC,
+                    pli.EffectiveFrom DESC
+            `);
+
+        const row = result?.recordset?.[0];
+
+        if (!row) return null;
+
+        return buildPricingResult(row);
+    },
+
+    async findCustomerSegmentPrice(context, tx) {
+        const { customerId, itemId, itemSpecId, quantity, documentDate, unitId } = context;
+
+        const pool = tx ? null : await getMssqlPool('DEFAULT');
+        const req = new sql.Request(tx || pool);
+
+        req.input("CustomerId", sql.Int, customerId);
+        req.input("ItemId", sql.Int, itemId);
+        req.input("ItemSpecId", sql.Int, itemSpecId);
+        req.input("Quantity", sql.Decimal(18, 4), quantity);
+        req.input("DocumentDate", sql.Date, documentDate);
+        req.input("UnitId", sql.Int, unitId);
+
+        const result = await req.query(`
+                SELECT TOP 1
+
+                    pli.PriceListItemId
+                        AS pricingReferenceId,
+
+                    pli.UnitPrice
+                        AS unitPrice,
+
+                    pli.UnitCost
+                        AS unitCost,
+
+                    pli.PricingMethod
+                        AS pricingMethod,
+
+                    CASE
+
+                        WHEN pli.PricingMethod = 'MARKUP'
+                            THEN pli.MarkupPercent
+
+                        WHEN pli.PricingMethod = 'MARGIN'
+                            THEN pli.MarginPercent
+
+                        WHEN pli.PricingMethod = 'DISCOUNT_PERCENT'
+                            THEN pli.DiscountPercent
+
+                        WHEN pli.PricingMethod = 'DISCOUNT_AMOUNT'
+                            THEN pli.DiscountAmount
+
+                        ELSE 0
+
+                    END
+                        AS pricingValue,
+
+                    'CUSTOMER_SEGMENT_PRICE_LIST'
+                        AS pricingSource,
+
+                    'PriceListItems'
+                        AS pricingReferenceTable,
+
+                    CAST(0 AS BIT)
+                        AS stopProcessing
+
+                FROM dbo.Customers c
+
+                INNER JOIN dbo.PriceLists pl
+                    ON pl.CustomerSegmentId =
+                        c.CustomerSegmentId
+
+                INNER JOIN dbo.PriceListItems pli
+                    ON pli.PriceListId =
+                        pl.PriceListId
+
+                WHERE
+                    c.CustomerId = @CustomerId
+
+                    AND pli.ItemId = @ItemId
+
+                    AND (
+                        pli.ItemSpecId IS NULL
+                        OR pli.ItemSpecId = @ItemSpecId
+                    )
+
+                    AND pli.UnitId = @UnitId
 
                     AND @Quantity >=
                         ISNULL(pli.MinQuantity, 0)
@@ -482,7 +605,11 @@ export const pricingResolverService = {
                 WHERE
                     (
                         @PriceListId IS NOT NULL AND pli.PriceListId = @PriceListId
-                        OR @PriceListId IS NULL AND pl.CustomerPriceGroupId IS NULL
+                        OR (
+                            @PriceListId IS NULL
+                            AND pl.CustomerPriceGroupId IS NULL
+                            AND pl.CustomerSegmentId IS NULL
+                        )
                     )
 
                     AND pli.ItemId = @ItemId
@@ -492,10 +619,7 @@ export const pricingResolverService = {
                         OR pli.ItemSpecId = @ItemSpecId
                     )
 
-                    AND (
-                        pli.UnitId IS NULL
-                        OR pli.UnitId = @UnitId
-                    )
+                    AND pli.UnitId = @UnitId
 
                     AND @Quantity >=
                         ISNULL(pli.MinQuantity, 0)
@@ -534,6 +658,150 @@ export const pricingResolverService = {
         if (!row) return null;
 
         return buildPricingResult(row);
+    },
+
+    async findStandardBaseUnitFallbackPrice(context, tx) {
+        const {
+            itemId,
+            itemSpecId,
+            quantity,
+            documentDate,
+            unitId,
+            priceListId,
+        } = context;
+
+        const pool = tx ? null : await getMssqlPool("DEFAULT");
+        const executor = tx || pool;
+        const conversion = await unitConversionService.convertToItemBase(executor, {
+            itemId,
+            itemSpecId,
+            fromUnitId: unitId,
+            quantity,
+            asOf: documentDate,
+        });
+
+        if (conversion.baseUnitId === unitId) return null;
+
+        const req = new sql.Request(executor);
+        req.input("ItemId", sql.Int, itemId);
+        req.input("ItemSpecId", sql.Int, itemSpecId);
+        req.input("Quantity", sql.Decimal(18, 4), conversion.baseQuantity);
+        req.input("DocumentDate", sql.Date, documentDate);
+        req.input("UnitId", sql.Int, conversion.baseUnitId);
+        req.input("PriceListId", sql.Int, priceListId);
+
+        const result = await req.query(`
+                SELECT TOP 1
+
+                    pli.PriceListItemId
+                        AS pricingReferenceId,
+
+                    pli.UnitPrice
+                        AS baseUnitPrice,
+
+                    pli.UnitCost
+                        AS baseUnitCost,
+
+                    pli.PricingMethod
+                        AS pricingMethod,
+
+                    CASE
+
+                        WHEN pli.PricingMethod = 'MARKUP'
+                            THEN pli.MarkupPercent
+
+                        WHEN pli.PricingMethod = 'MARGIN'
+                            THEN pli.MarginPercent
+
+                        WHEN pli.PricingMethod = 'DISCOUNT_PERCENT'
+                            THEN pli.DiscountPercent
+
+                        WHEN pli.PricingMethod = 'DISCOUNT_AMOUNT'
+                            THEN pli.DiscountAmount
+
+                        ELSE 0
+
+                    END
+                        AS pricingValue,
+
+                    'DEFAULT_PRICE_LIST_BASE_UNIT_FALLBACK'
+                        AS pricingSource,
+
+                    'PriceListItems'
+                        AS pricingReferenceTable,
+
+                    CAST(0 AS BIT)
+                        AS stopProcessing
+
+                FROM dbo.PriceListItems pli
+
+                INNER JOIN dbo.PriceLists pl
+                    ON pl.PriceListId =
+                        pli.PriceListId
+
+                WHERE
+                    (
+                        (
+                            @PriceListId IS NOT NULL
+                            AND pli.PriceListId = @PriceListId
+                            AND pl.CustomerPriceGroupId IS NULL
+                            AND pl.CustomerSegmentId IS NULL
+                        )
+                        OR (
+                            @PriceListId IS NULL
+                            AND pl.CustomerPriceGroupId IS NULL
+                            AND pl.CustomerSegmentId IS NULL
+                        )
+                    )
+
+                    AND pli.ItemId = @ItemId
+
+                    AND (
+                        pli.ItemSpecId IS NULL
+                        OR pli.ItemSpecId = @ItemSpecId
+                    )
+
+                    AND pli.UnitId = @UnitId
+
+                    AND @Quantity >=
+                        ISNULL(pli.MinQuantity, 0)
+
+                    AND (
+                        pli.MaxQuantity IS NULL
+                        OR @Quantity <= pli.MaxQuantity
+                    )
+
+                    AND (
+                        pli.EffectiveFrom IS NULL
+                        OR pli.EffectiveFrom <= @DocumentDate
+                    )
+
+                    AND (
+                        pli.EffectiveTo IS NULL
+                        OR pli.EffectiveTo >= @DocumentDate
+                    )
+
+                    AND pl.IsActive = 1
+
+                ORDER BY
+                    CASE
+                        WHEN pli.ItemSpecId = @ItemSpecId THEN 0
+                        WHEN pli.ItemSpecId IS NULL THEN 1
+                        ELSE 2
+                    END,
+                    pl.Priority DESC,
+                    pli.MinQuantity DESC,
+                    pli.EffectiveFrom DESC
+            `);
+
+        const row = result?.recordset?.[0];
+        if (!row) return null;
+
+        return buildPricingResult({
+            ...row,
+            unitPrice: Number(row.baseUnitPrice || 0) * conversion.conversionFactor,
+            unitCost: Number(row.baseUnitCost || 0) * conversion.conversionFactor,
+        });
     },
 
     async applyLineDiscounts(context, pricingResult, tx) {

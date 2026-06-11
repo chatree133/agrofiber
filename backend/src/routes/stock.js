@@ -87,7 +87,10 @@ function buildStockOnHandFilters(query) {
     inputs.lotId = { type: sql.BigInt, value: Number(query.lotId) };
   }
   if (query.search) {
-    conditions.push('(i.ItemCode LIKE @search OR i.ItemName LIKE @search OR ispec.SalesSKU LIKE @search OR soh.LotNo LIKE @search)');
+    const searchSql = query.summary === 'true' || query.summary === true
+      ? '(i.ItemCode LIKE @search OR i.ItemName LIKE @search OR ispec.SalesSKU LIKE @search)'
+      : '(i.ItemCode LIKE @search OR i.ItemName LIKE @search OR ispec.SalesSKU LIKE @search OR soh.LotNo LIKE @search)';
+    conditions.push(searchSql);
     inputs.search = { type: sql.NVarChar(255), value: `%${query.search}%` };
   }
   if (query.includeZero === 'false' || query.includeZero === false || query.includeZero === '0') {
@@ -99,6 +102,73 @@ function buildStockOnHandFilters(query) {
 
 async function listStockOnHand(req, res) {
   const { whereSql, inputs } = buildStockOnHandFilters(req.query);
+  const summary = req.query.summary === 'true' || req.query.summary === true;
+
+  if (summary) {
+    const rows = await mssqlQuery('DEFAULT', `
+      SELECT
+        MIN(soh.StockOnHandId) AS StockOnHandId,
+        soh.ItemId,
+        i.ItemCode,
+        i.ItemName,
+        soh.ItemSpecId,
+        COALESCE(ispec.SalesSKU, i.ItemCode) AS SalesSKU,
+        ispec.SpecCode,
+        ispec.SpecName,
+        soh.WarehouseId,
+        wh.WarehouseCode,
+        wh.WarehouseName,
+        SUM(soh.QuantityOnHand) AS QuantityOnHand,
+        SUM(soh.QuantityReserved) AS QuantityReserved,
+        MAX(soh.UpdatedAt) AS UpdatedAt
+      FROM dbo.StockOnHand soh
+      JOIN dbo.Items i ON i.ItemId = soh.ItemId
+      JOIN dbo.Warehouses wh ON wh.WarehouseId = soh.WarehouseId
+      LEFT JOIN dbo.ItemSpecs ispec ON ispec.ItemSpecId = soh.ItemSpecId
+      ${whereSql}
+      GROUP BY
+        soh.WarehouseId,
+        wh.WarehouseCode,
+        wh.WarehouseName,
+        soh.ItemId,
+        i.ItemCode,
+        i.ItemName,
+        soh.ItemSpecId,
+        ispec.SalesSKU,
+        ispec.SpecCode,
+        ispec.SpecName
+      ORDER BY COALESCE(ispec.SalesSKU, i.ItemCode), wh.WarehouseCode
+    `, { inputs });
+
+    return res.json({
+      data: rows.map((r) => ({
+        id: r.StockOnHandId,
+        itemId: r.ItemId,
+        itemCode: r.ItemCode,
+        itemName: r.ItemName,
+        itemSpecId: r.ItemSpecId,
+        salesSku: r.SalesSKU,
+        specCode: r.SpecCode,
+        specName: r.SpecName,
+        warehouseId: r.WarehouseId,
+        warehouseCode: r.WarehouseCode,
+        warehouseName: r.WarehouseName,
+        locationId: null,
+        locationCode: null,
+        locationName: null,
+        lotId: null,
+        lotNo: null,
+        gradeId: null,
+        gradeName: null,
+        qtyOnHand: r.QuantityOnHand,
+        qtyReserved: r.QuantityReserved,
+        qtyAvailable: Number(r.QuantityOnHand || 0) - Number(r.QuantityReserved || 0),
+        updatedAt: r.UpdatedAt,
+        summary: true,
+      })),
+    });
+  }
+
   const rows = await mssqlQuery('DEFAULT', `
     SELECT
       soh.StockOnHandId,
@@ -327,318 +397,6 @@ router.get(
         total: rows[0]?.TotalCount || 0,
       },
     });
-  }),
-);
-
-function makeDocNo(prefix) {
-  const ts = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
-  const rnd = Math.random().toString(16).slice(2, 6).toUpperCase();
-  return `${prefix}-${ts}-${rnd}`.slice(0, 50);
-}
-
-router.post(
-  '/goods-issues',
-  writeRoles,
-  asyncHandler(async (req, res) => {
-    const userId = getUserId(req);
-    const goodsIssueTypeId = parseId(req.body.goodsIssueTypeId, 'goodsIssueTypeId');
-    const warehouseId = parseId(req.body.warehouseId, 'warehouseId');
-    const requestDate = parseOptionalDate(req.body.requestDate, 'requestDate');
-    const issueDate = parseOptionalDate(req.body.issueDate, 'issueDate');
-
-    const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
-    if (!lines.length) throw badRequest('lines is required');
-
-    const docNo = String(req.body.documentNo || '').trim() || makeDocNo('GI');
-    const branchId = parseOptionalId(req.body.branchId, 'branchId');
-    const customerId = parseOptionalId(req.body.customerId, 'customerId');
-    const remark = req.body.remark ? String(req.body.remark).trim() : null;
-
-    const headerRows = await mssqlQuery('DEFAULT', `
-      INSERT INTO dbo.GoodsIssues (
-        DocumentNo,
-        BranchId,
-        GoodsIssueTypeId,
-        CustomerId,
-        WarehouseId,
-        RequestDate,
-        IssueDate,
-        Status,
-        LimitSheetTotal,
-        RequestedSheetTotal,
-        IssuedSheetTotal,
-        PalletCountTotal,
-        M3Total,
-        Remark,
-        CreatedBy
-      )
-      OUTPUT INSERTED.GoodsIssueId
-      VALUES (
-        @documentNo,
-        @branchId,
-        @goodsIssueTypeId,
-        @customerId,
-        @warehouseId,
-        ISNULL(@requestDate, CAST(SYSUTCDATETIME() AS DATE)),
-        @issueDate,
-        ISNULL(@status, 'draft'),
-        0, 0, 0, 0, 0,
-        @remark,
-        @createdBy
-      )
-    `, {
-      inputs: {
-        documentNo: { type: sql.NVarChar(50), value: docNo },
-        branchId: { type: sql.Int, value: branchId },
-        goodsIssueTypeId: { type: sql.Int, value: goodsIssueTypeId },
-        customerId: { type: sql.Int, value: customerId },
-        warehouseId: { type: sql.Int, value: warehouseId },
-        requestDate: { type: sql.Date, value: requestDate },
-        issueDate: { type: sql.Date, value: issueDate },
-        status: { type: sql.NVarChar(30), value: normalizeEnum(req.body.status, ['draft', 'requested', 'approved', 'issued', 'cancelled'], 'status') },
-        remark: { type: sql.NVarChar(1000), value: remark },
-        createdBy: { type: sql.Int, value: userId },
-      },
-    });
-
-    const goodsIssueId = headerRows[0]?.GoodsIssueId;
-    if (!goodsIssueId) throw new Error('Failed to create goods issue');
-
-    for (let idx = 0; idx < lines.length; idx += 1) {
-      const line = lines[idx] || {};
-      const lineNum = Number.isInteger(line.lineNum) && line.lineNum > 0 ? line.lineNum : idx + 1;
-      const itemId = parseId(line.itemId, `lines[${idx}].itemId`);
-      const unitId = parseId(line.unitId, `lines[${idx}].unitId`);
-
-      const requestedQuantity = parseOptionalNumber(line.requestedQuantity, `lines[${idx}].requestedQuantity`) ?? 0;
-      const issuedQuantity = parseOptionalNumber(line.issuedQuantity, `lines[${idx}].issuedQuantity`) ?? 0;
-
-      await mssqlQuery('DEFAULT', `
-        INSERT INTO dbo.GoodsIssueLines (
-          GoodsIssueId,
-          LineNum,
-          ItemId,
-          ItemSpecId,
-          LotId,
-          WarehouseId,
-          LocationId,
-          UnitId,
-          RequestedQuantity,
-          IssuedQuantity,
-          RequestedSheetQty,
-          IssuedSheetQty,
-          LimitSheetQty,
-          PalletCount,
-          M3Quantity,
-          ProductTypeId,
-          ThicknessId,
-          WidthId,
-          LengthId,
-          Remark
-        )
-        VALUES (
-          @goodsIssueId,
-          @lineNum,
-          @itemId,
-          @itemSpecId,
-          @lotId,
-          @warehouseIdLine,
-          @locationId,
-          @unitId,
-          @requestedQuantity,
-          @issuedQuantity,
-          @requestedSheetQty,
-          @issuedSheetQty,
-          @limitSheetQty,
-          @palletCount,
-          @m3Quantity,
-          @productTypeId,
-          @thicknessId,
-          @widthId,
-          @lengthId,
-          @remark
-        )
-      `, {
-        inputs: {
-          goodsIssueId: { type: sql.Int, value: goodsIssueId },
-          lineNum: { type: sql.Int, value: lineNum },
-          itemId: { type: sql.Int, value: itemId },
-          itemSpecId: { type: sql.Int, value: parseOptionalId(line.itemSpecId, `lines[${idx}].itemSpecId`) },
-          lotId: { type: sql.BigInt, value: line.lotId === undefined || line.lotId === null || line.lotId === '' ? null : Number(line.lotId) },
-          warehouseIdLine: { type: sql.Int, value: parseOptionalId(line.warehouseId, `lines[${idx}].warehouseId`) },
-          locationId: { type: sql.Int, value: parseOptionalId(line.locationId, `lines[${idx}].locationId`) },
-          unitId: { type: sql.Int, value: unitId },
-          requestedQuantity: { type: sql.Decimal(18, 4), value: requestedQuantity },
-          issuedQuantity: { type: sql.Decimal(18, 4), value: issuedQuantity },
-          requestedSheetQty: { type: sql.Decimal(18, 4), value: parseOptionalNumber(line.requestedSheetQty, `lines[${idx}].requestedSheetQty`) },
-          issuedSheetQty: { type: sql.Decimal(18, 4), value: parseOptionalNumber(line.issuedSheetQty, `lines[${idx}].issuedSheetQty`) },
-          limitSheetQty: { type: sql.Decimal(18, 4), value: parseOptionalNumber(line.limitSheetQty, `lines[${idx}].limitSheetQty`) },
-          palletCount: { type: sql.Decimal(18, 4), value: parseOptionalNumber(line.palletCount, `lines[${idx}].palletCount`) },
-          m3Quantity: { type: sql.Decimal(18, 6), value: parseOptionalNumber(line.m3Quantity, `lines[${idx}].m3Quantity`) },
-          productTypeId: { type: sql.Int, value: parseOptionalId(line.productTypeId, `lines[${idx}].productTypeId`) },
-          thicknessId: { type: sql.Int, value: parseOptionalId(line.thicknessId, `lines[${idx}].thicknessId`) },
-          widthId: { type: sql.Int, value: parseOptionalId(line.widthId, `lines[${idx}].widthId`) },
-          lengthId: { type: sql.Int, value: parseOptionalId(line.lengthId, `lines[${idx}].lengthId`) },
-          remark: { type: sql.NVarChar(1000), value: line.remark ? String(line.remark).trim() : null },
-        },
-      });
-    }
-
-    res.status(201).json({ data: { id: goodsIssueId, documentNo: docNo, status: req.body.status || 'draft' } });
-  }),
-);
-
-router.post(
-  '/goods-receipts',
-  writeRoles,
-  asyncHandler(async (req, res) => {
-    const userId = getUserId(req);
-    const goodsReceiptTypeId = parseId(req.body.goodsReceiptTypeId, 'goodsReceiptTypeId');
-    const warehouseId = parseId(req.body.warehouseId, 'warehouseId');
-    const receiptDate = parseOptionalDate(req.body.receiptDate, 'receiptDate');
-
-    const lines = Array.isArray(req.body.lines) ? req.body.lines : [];
-    if (!lines.length) throw badRequest('lines is required');
-
-    const docNo = String(req.body.documentNo || '').trim() || makeDocNo('GR');
-    const branchId = parseOptionalId(req.body.branchId, 'branchId');
-    const vendorId = parseOptionalId(req.body.vendorId, 'vendorId');
-    const customerId = parseOptionalId(req.body.customerId, 'customerId');
-    const purchaseOrderId = parseOptionalId(req.body.purchaseOrderId, 'purchaseOrderId');
-    const productionOrderId = parseOptionalId(req.body.productionOrderId, 'productionOrderId');
-    const remark = req.body.remark ? String(req.body.remark).trim() : null;
-
-    const headerRows = await mssqlQuery('DEFAULT', `
-      INSERT INTO dbo.GoodsReceipts (
-        DocumentNo,
-        BranchId,
-        GoodsReceiptTypeId,
-        VendorId,
-        CustomerId,
-        PurchaseOrderId,
-        ProductionOrderId,
-        WarehouseId,
-        ReceiptDate,
-        Status,
-        ReceivedSheetTotal,
-        PalletCountTotal,
-        M3Total,
-        Remark,
-        CreatedBy
-      )
-      OUTPUT INSERTED.GoodsReceiptId
-      VALUES (
-        @documentNo,
-        @branchId,
-        @goodsReceiptTypeId,
-        @vendorId,
-        @customerId,
-        @purchaseOrderId,
-        @productionOrderId,
-        @warehouseId,
-        ISNULL(@receiptDate, CAST(SYSUTCDATETIME() AS DATE)),
-        ISNULL(@status, 'draft'),
-        0, 0, 0,
-        @remark,
-        @createdBy
-      )
-    `, {
-      inputs: {
-        documentNo: { type: sql.NVarChar(50), value: docNo },
-        branchId: { type: sql.Int, value: branchId },
-        goodsReceiptTypeId: { type: sql.Int, value: goodsReceiptTypeId },
-        vendorId: { type: sql.Int, value: vendorId },
-        customerId: { type: sql.Int, value: customerId },
-        purchaseOrderId: { type: sql.Int, value: purchaseOrderId },
-        productionOrderId: { type: sql.Int, value: productionOrderId },
-        warehouseId: { type: sql.Int, value: warehouseId },
-        receiptDate: { type: sql.Date, value: receiptDate },
-        status: { type: sql.NVarChar(30), value: normalizeEnum(req.body.status, ['draft', 'received', 'posted', 'cancelled'], 'status') },
-        remark: { type: sql.NVarChar(1000), value: remark },
-        createdBy: { type: sql.Int, value: userId },
-      },
-    });
-
-    const goodsReceiptId = headerRows[0]?.GoodsReceiptId;
-    if (!goodsReceiptId) throw new Error('Failed to create goods receipt');
-
-    for (let idx = 0; idx < lines.length; idx += 1) {
-      const line = lines[idx] || {};
-      const lineNum = Number.isInteger(line.lineNum) && line.lineNum > 0 ? line.lineNum : idx + 1;
-      const itemId = parseId(line.itemId, `lines[${idx}].itemId`);
-      const unitId = parseId(line.unitId, `lines[${idx}].unitId`);
-      const receivedQuantity = parseOptionalNumber(line.receivedQuantity, `lines[${idx}].receivedQuantity`);
-      if (receivedQuantity === null) throw badRequest(`lines[${idx}].receivedQuantity is required`);
-
-      await mssqlQuery('DEFAULT', `
-        INSERT INTO dbo.GoodsReceiptLines (
-          GoodsReceiptId,
-          LineNum,
-          ItemId,
-          ItemSpecId,
-          LotId,
-          LotNo,
-          WarehouseId,
-          LocationId,
-          UnitId,
-          ReceivedQuantity,
-          ReceivedSheetQty,
-          PalletCount,
-          M3Quantity,
-          ProductTypeId,
-          ThicknessId,
-          WidthId,
-          LengthId,
-          UnitCostSnapshot,
-          Remark
-        )
-        VALUES (
-          @goodsReceiptId,
-          @lineNum,
-          @itemId,
-          @itemSpecId,
-          @lotId,
-          @lotNo,
-          @warehouseIdLine,
-          @locationId,
-          @unitId,
-          @receivedQuantity,
-          @receivedSheetQty,
-          @palletCount,
-          @m3Quantity,
-          @productTypeId,
-          @thicknessId,
-          @widthId,
-          @lengthId,
-          @unitCostSnapshot,
-          @remark
-        )
-      `, {
-        inputs: {
-          goodsReceiptId: { type: sql.Int, value: goodsReceiptId },
-          lineNum: { type: sql.Int, value: lineNum },
-          itemId: { type: sql.Int, value: itemId },
-          itemSpecId: { type: sql.Int, value: parseOptionalId(line.itemSpecId, `lines[${idx}].itemSpecId`) },
-          lotId: { type: sql.BigInt, value: line.lotId === undefined || line.lotId === null || line.lotId === '' ? null : Number(line.lotId) },
-          lotNo: { type: sql.NVarChar(80), value: line.lotNo ? String(line.lotNo).trim() : null },
-          warehouseIdLine: { type: sql.Int, value: parseOptionalId(line.warehouseId, `lines[${idx}].warehouseId`) },
-          locationId: { type: sql.Int, value: parseOptionalId(line.locationId, `lines[${idx}].locationId`) },
-          unitId: { type: sql.Int, value: unitId },
-          receivedQuantity: { type: sql.Decimal(18, 4), value: receivedQuantity },
-          receivedSheetQty: { type: sql.Decimal(18, 4), value: parseOptionalNumber(line.receivedSheetQty, `lines[${idx}].receivedSheetQty`) },
-          palletCount: { type: sql.Decimal(18, 4), value: parseOptionalNumber(line.palletCount, `lines[${idx}].palletCount`) },
-          m3Quantity: { type: sql.Decimal(18, 6), value: parseOptionalNumber(line.m3Quantity, `lines[${idx}].m3Quantity`) },
-          productTypeId: { type: sql.Int, value: parseOptionalId(line.productTypeId, `lines[${idx}].productTypeId`) },
-          thicknessId: { type: sql.Int, value: parseOptionalId(line.thicknessId, `lines[${idx}].thicknessId`) },
-          widthId: { type: sql.Int, value: parseOptionalId(line.widthId, `lines[${idx}].widthId`) },
-          lengthId: { type: sql.Int, value: parseOptionalId(line.lengthId, `lines[${idx}].lengthId`) },
-          unitCostSnapshot: { type: sql.Decimal(18, 4), value: parseOptionalNumber(line.unitCostSnapshot, `lines[${idx}].unitCostSnapshot`) },
-          remark: { type: sql.NVarChar(1000), value: line.remark ? String(line.remark).trim() : null },
-        },
-      });
-    }
-
-    res.status(201).json({ data: { id: goodsReceiptId, documentNo: docNo, status: req.body.status || 'draft' } });
   }),
 );
 

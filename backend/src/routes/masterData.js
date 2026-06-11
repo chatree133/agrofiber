@@ -30,7 +30,15 @@ export async function refreshLookupsCache() {
 
     -- 2: Units
     SELECT UnitId AS value, UnitCode + ' - ' + UnitName AS label 
-    FROM dbo.Units ORDER BY UnitCode;
+    FROM dbo.Units
+    WHERE UnitCode IN ('PACK', 'PALLET', 'PCS', 'SHEET')
+    ORDER BY CASE UnitCode
+      WHEN 'PACK' THEN 1
+      WHEN 'PALLET' THEN 2
+      WHEN 'PCS' THEN 3
+      WHEN 'SHEET' THEN 4
+      ELSE 99
+    END;
 
     -- 3: TaxCodes
     SELECT TaxCodeId AS value, TaxCode + ' (' + CAST(TaxRatePercent AS NVARCHAR) + '%)' AS label, TaxRatePercent 
@@ -75,6 +83,10 @@ export async function refreshLookupsCache() {
     -- 13: Roles (ถ้าต้องการให้ Frontend รู้จัก Role ต่างๆ ด้วย)
     SELECT RoleId AS value, RoleName AS label 
     FROM dbo.Roles ORDER BY RoleName;
+
+    -- 14: Provices (สำหรับ Dropdown ที่ต้องการเลือกจังหวัด)
+    SELECT PROVINCE_ID AS value, PROVINCE_THAI AS label 
+    FROM dbo.provinces ORDER BY PROVINCE_THAI COLLATE Thai_100_CI_AI;
   `;
 
   const result = await mssqlQueryFull('DEFAULT', sql);
@@ -93,7 +105,8 @@ export async function refreshLookupsCache() {
     grades: result.recordsets[10] || [],
     customerSegments: result.recordsets[11] || [],
     customerPriceGroups: result.recordsets[12] || [],
-    roles: result.recordsets[13] || []
+    roles: result.recordsets[13] || [],
+    provinces: result.recordsets[14] || [],
   };
 
   lookupsCache = newData;
@@ -228,6 +241,142 @@ router.get(
     }
 
     res.json({ data: rows[0] });
+  })
+);
+
+// --- Units (UOM) CRUD ---
+
+// Get all Units
+router.get(
+  '/units',
+  allowRoles('admin', 'accounting', 'user', 'audit'),
+  asyncHandler(async (req, res) => {
+    const rows = await mssqlQuery('DEFAULT', `
+      SELECT UnitId AS id, UnitCode AS code, UnitName AS name
+      FROM dbo.Units
+      ORDER BY UnitCode
+    `);
+    res.json({ data: rows });
+  })
+);
+
+// Create a new Unit (admin only)
+router.post(
+  '/units',
+  allowRoles('admin'),
+  asyncHandler(async (req, res) => {
+    const code = String(req.body.code || '').trim().toUpperCase();
+    const name = String(req.body.name || '').trim();
+
+    if (!code) {
+      return res.status(400).json({ message: 'กรุณากรอกรหัสหน่วยนับ (Code is required)' });
+    }
+    if (!name) {
+      return res.status(400).json({ message: 'กรุณากรอกชื่อหน่วยนับ (Name is required)' });
+    }
+
+    // Check if code already exists
+    const existing = await mssqlQuery('DEFAULT', `
+      SELECT 1 FROM dbo.Units WHERE UnitCode = @code
+    `, {
+      inputs: {
+        code: { type: sql.NVarChar(30), value: code }
+      }
+    });
+
+    if (existing.length > 0) {
+      return res.status(400).json({ message: `รหัสหน่วยนับ '${code}' มีในระบบแล้ว` });
+    }
+
+    const result = await mssqlQuery('DEFAULT', `
+      INSERT INTO dbo.Units (UnitCode, UnitName)
+      OUTPUT INSERTED.UnitId AS id
+      VALUES (@code, @name)
+    `, {
+      inputs: {
+        code: { type: sql.NVarChar(30), value: code },
+        name: { type: sql.NVarChar(100), value: name }
+      }
+    });
+
+    invalidateLookupsCache();
+
+    res.status(201).json({
+      success: true,
+      data: {
+        id: result[0].id,
+        code,
+        name
+      }
+    });
+  })
+);
+
+// Update a Unit (admin only)
+router.put(
+  '/units/:id',
+  allowRoles('admin'),
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ message: 'Invalid ID parameter' });
+    }
+
+    const code = String(req.body.code || '').trim().toUpperCase();
+    const name = String(req.body.name || '').trim();
+
+    if (!code) {
+      return res.status(400).json({ message: 'กรุณากรอกรหัสหน่วยนับ (Code is required)' });
+    }
+    if (!name) {
+      return res.status(400).json({ message: 'กรุณากรอกชื่อหน่วยนับ (Name is required)' });
+    }
+
+    // Check duplicate code for other IDs
+    const duplicate = await mssqlQuery('DEFAULT', `
+      SELECT 1 FROM dbo.Units WHERE UnitCode = @code AND UnitId <> @id
+    `, {
+      inputs: {
+        code: { type: sql.NVarChar(30), value: code },
+        id: { type: sql.Int, value: id }
+      }
+    });
+
+    if (duplicate.length > 0) {
+      return res.status(400).json({ message: `รหัสหน่วยนับ '${code}' ซ้ำกับหน่วยนับอื่นในระบบ` });
+    }
+
+    await mssqlQuery('DEFAULT', `
+      UPDATE dbo.Units
+      SET UnitCode = @code, UnitName = @name
+      WHERE UnitId = @id
+    `, {
+      inputs: {
+        code: { type: sql.NVarChar(30), value: code },
+        name: { type: sql.NVarChar(100), value: name },
+        id: { type: sql.Int, value: id }
+      }
+    });
+
+    invalidateLookupsCache();
+
+    res.json({
+      success: true,
+      data: {
+        id,
+        code,
+        name
+      }
+    });
+  })
+);
+
+// Delete a Unit (blocked)
+router.delete(
+  '/units/:id',
+  allowRoles('admin'),
+  asyncHandler(async (req, res) => {
+    return res.status(400).json({ message: 'ไม่อนุญาตให้ลบหน่วยนับเนื่องจากมีผลกระทบต่อประวัติสินค้าและการแปลงหน่วย' });
   })
 );
 

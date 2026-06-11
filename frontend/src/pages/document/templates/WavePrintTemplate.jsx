@@ -94,8 +94,18 @@ export default function WavePrintTemplate({ docData }) {
           {lines.map((line, idx) => {
             const sku = line.salesSku || line.itemCode || '-';
             const name = line.itemName || '-';
-            const qty = line.quantityRequired || 0;
-            const unit = 'แผ่น';
+            const baseQty = Number(line.quantityRequired || 0).toLocaleString('th-TH');
+            const baseUnit = line.unitCode || 'PCS';
+            const requestedQty = line.requestedQuantity;
+            const requestedUnit = line.requestedUnitCode;
+            const hasRequestedUnit =
+              requestedQty != null &&
+              requestedUnit &&
+              (requestedUnit !== baseUnit || Number(requestedQty) !== Number(line.quantityRequired || 0));
+            const qty = hasRequestedUnit
+              ? Number(requestedQty || 0).toLocaleString('th-TH')
+              : baseQty;
+            const unit = hasRequestedUnit ? `${requestedUnit} (${baseQty} ${baseUnit})` : baseUnit;
             const location = line.fromLocationCode || '-';
             const lot = line.lotNo || '-';
             const remark = line.remark;

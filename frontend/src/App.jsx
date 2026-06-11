@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard.jsx';
 import GenericPage from './pages/GenericPage.jsx';
 import Login from './pages/Login.jsx';
 import SalesOrderCreate from './pages/salesOrders/SalesOrderCreate.jsx';
+import DeliveryScheduler from './pages/salesOrders/DeliveryScheduler.jsx';
 import SalesOrderList from './pages/salesOrders/SalesOrderList.jsx';
 import Users from './pages/users/Users.jsx';
 import Roles from './pages/users/Roles.jsx';
@@ -34,6 +35,11 @@ import WavePickingDetail from './pages/wms/WavePickingDetail.jsx';
 import TransferTasks from './pages/wms/TransferTasks.jsx';
 import TransferTaskDetail from './pages/wms/TransferTaskDetail.jsx';
 import WmsDashboard from './pages/wms/WmsDashboard.jsx';
+import IncidentList from './pages/wms/IncidentList.jsx';
+import LoadPlanList from './pages/wms/LoadPlanList.jsx';
+import LoadPlanCreate from './pages/wms/LoadPlanCreate.jsx';
+import DriverPortal from './pages/wms/DriverPortal.jsx';
+import TransportMaster from './pages/wms/TransportMaster.jsx';
 import DeliveryOrderList from './pages/deliveryorder/DeliveryOrderList.jsx';
 import DeliveryOrderDetail from './pages/deliveryorder/DeliveryOrderDetail.jsx';
 import GoodsIssueList from './pages/inventory/GoodsIssueList.jsx';
@@ -44,6 +50,8 @@ import GoodsReceiptForm from './pages/inventory/GoodsReceiptForm.jsx';
 import GoodsReceiptDetail from './pages/inventory/GoodsReceiptDetail.jsx';
 import InventoryTransfer from './pages/inventory/InventoryTransfer.jsx';
 import TransactionTypes from './pages/master/TransactionTypes.jsx';
+import Conversions from './pages/master/Conversions.jsx';
+import Uom from './pages/master/Uom.jsx';
 
 function ProtectedRoute({ children }) {
   const { token } = useAuth();
@@ -72,6 +80,7 @@ function AppRoutes() {
         <Route path="master/items" element={<Items />} />
         <Route path="master/items/create" element={<ItemForm />} />
         <Route path="master/items/:id/edit" element={<ItemForm />} />
+        <Route path="master/conversions" element={<Conversions />} />
         <Route path="master/pricing-policies" element={<PricingPolicies />} />
         <Route path="master/pricing-policy-history" element={<PricingPolicyHistory />} />
         <Route path="master/workflows" element={<WorkflowSettings />} />
@@ -79,6 +88,7 @@ function AppRoutes() {
         <Route path="master/customers" element={<Customers />} />
         <Route path="master/customers/create" element={<CustomerForm />} />
         <Route path="master/customers/:id/edit" element={<CustomerForm />} />
+        <Route path="master/uom" element={<Uom />} />
         
         <Route path="quotation/create" element={<QuotationCreate />} />
         <Route path="quotation/list" element={<QuotationList />} />
@@ -112,6 +122,10 @@ function AppRoutes() {
         <Route path="wms/waves/:id" element={<WavePickingDetail />} />
         <Route path="wms/transfers" element={<TransferTasks />} />
         <Route path="wms/transfers/:id" element={<TransferTaskDetail />} />
+        <Route path="wms/incidents" element={<IncidentList />} />
+        <Route path="wms/transport-master" element={<TransportMaster />} />
+        <Route path="wms/load-plans" element={<LoadPlanList />} />
+        <Route path="wms/load-plans/create" element={<LoadPlanCreate />} />
         
         {/* Delivery Order Routes */}
         <Route path="deliveryorder/list" element={<DeliveryOrderList />} />
@@ -124,6 +138,22 @@ function AppRoutes() {
         <Route path="settings/smtp" element={<SmtpSettings />} />
         <Route path="*" element={<GenericPage />} />
       </Route>
+      <Route
+        path="/driver/deliveries"
+        element={
+          <ProtectedRoute>
+            <DriverPortal />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/salesorder/delivery-scheduler"
+        element={
+          <ProtectedRoute>
+            <DeliveryScheduler />
+          </ProtectedRoute>
+        }
+      />
     </Routes>
   );
 }

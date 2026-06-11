@@ -21,6 +21,13 @@ body {
   border-radius: 14px;
   padding: 14px;
   color: #e5e7eb;
+  min-height: calc(100vh - 108px);
+}
+
+@media (min-width: 1024px) {
+  .wms-dashboard {
+    min-height: calc(100vh - 116px);
+  }
 }
 
 .wms-dashboard-text {
@@ -137,4 +144,41 @@ body {
 
 .ant-dropdown-menu {
   padding: 0;
+}
+
+/* WMS Incident Ticker styles */
+.wms-incident-ticker {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  background-color: rgba(220, 38, 38, 0.95);
+  border-top: 2px solid #ef4444;
+  color: #ffffff;
+  padding: 12px 0;
+  z-index: 99999;
+  overflow: hidden;
+  white-space: nowrap;
+  box-shadow: 0 -4px 15px rgba(0, 0, 0, 0.4);
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+}
+.wms-incident-ticker-content {
+  display: inline-block;
+  padding-left: 100%;
+  animation: wmsMarqueeScroll 60s linear infinite;
+}
+.wms-incident-ticker:hover .wms-incident-ticker-content {
+  animation-play-state: paused;
+}
+.wms-incident-ticker-item {
+  margin-right: 60px;
+  display: inline-block;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+}
+@keyframes wmsMarqueeScroll {
+  0% { transform: translate3d(0, 0, 0); }
+  100% { transform: translate3d(-100%, 0, 0); }
 }

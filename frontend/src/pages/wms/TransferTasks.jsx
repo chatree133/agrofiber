@@ -1,16 +1,22 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Card, Space, Table, Tag, Typography, message } from 'antd';
-import { ReloadOutlined, ScanOutlined } from '@ant-design/icons';
+import { Button, Card, Modal, Space, Table, Tag, Typography, message } from 'antd';
+import { ReloadOutlined, ScanOutlined, StopOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useWms } from '../../context/WmsContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
 
 const { Text } = Typography;
 
 export default function TransferTasks() {
   const navigate = useNavigate();
-  const { getWmsTasks } = useWms();
+  const { user } = useAuth();
+  const roles = user?.roles || [];
+  const canCancel = roles.includes('admin') || roles.includes('warehouse_manager');
+
+  const { getWmsTasks, cancelWmsTask } = useWms();
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -60,9 +66,42 @@ export default function TransferTasks() {
       title: 'การกระทำ',
       key: 'actions',
       render: (_, r) => (
-        <Button type="primary" size="small" icon={<ScanOutlined />} onClick={() => navigate(`/wms/transfers/${r.id}`)}>
-          เปิดหน้าสแกน
-        </Button>
+        <Space>
+          <Button type="primary" size="small" icon={<ScanOutlined />} onClick={() => navigate(`/wms/transfers/${r.id}`)}>
+            เปิดหน้าสแกน
+          </Button>
+          {canCancel ? (
+            <Button
+              danger
+              size="small"
+              icon={<StopOutlined />}
+              loading={actionLoading}
+              onClick={() => {
+                Modal.confirm({
+                  title: `ยกเลิก Task #${r.id}`,
+                  content: 'ต้องการยกเลิกใบงานโอนย้ายนี้หรือไม่?',
+                  okText: 'ยกเลิกใบงาน',
+                  okType: 'danger',
+                  cancelText: 'ปิด',
+                  onOk: async () => {
+                    setActionLoading(true);
+                    try {
+                      await cancelWmsTask(r.id);
+                      message.success(`ยกเลิก Task #${r.id} แล้ว`);
+                      await fetchTasks();
+                    } catch (err) {
+                      message.error('ยกเลิกใบงานไม่สำเร็จ: ' + err.message);
+                    } finally {
+                      setActionLoading(false);
+                    }
+                  },
+                });
+              }}
+            >
+              ยกเลิก
+            </Button>
+          ) : null}
+        </Space>
       ),
     },
   ];

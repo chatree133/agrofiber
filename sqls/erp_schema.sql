@@ -414,14 +414,16 @@ CREATE TABLE dbo.UnitConversions (
 CREATE TABLE dbo.ItemUnitConversions (
     ItemUnitConversionId INT IDENTITY(1,1) PRIMARY KEY,
     ItemId INT NOT NULL,
+    ItemSpecId INT NULL,
     FromUnitId INT NOT NULL,
     ToUnitId INT NOT NULL,
     ConversionFactor DECIMAL(18,8) NOT NULL,
     EffectiveFrom DATE NOT NULL DEFAULT (CAST(SYSUTCDATETIME() AS DATE)),
     EffectiveTo DATE NULL,
     IsActive BIT NOT NULL DEFAULT 1,
-    CONSTRAINT UQ_ItemUnitConversions UNIQUE (ItemId, FromUnitId, ToUnitId, EffectiveFrom),
+    CONSTRAINT UQ_ItemUnitConversions UNIQUE (ItemId, ItemSpecId, FromUnitId, ToUnitId, EffectiveFrom),
     CONSTRAINT FK_ItemUnitConversions_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
+    CONSTRAINT FK_ItemUnitConversions_ItemSpecs FOREIGN KEY (ItemSpecId) REFERENCES dbo.ItemSpecs(ItemSpecId),
     CONSTRAINT FK_ItemUnitConversions_FromUnits FOREIGN KEY (FromUnitId) REFERENCES dbo.Units(UnitId),
     CONSTRAINT FK_ItemUnitConversions_ToUnits FOREIGN KEY (ToUnitId) REFERENCES dbo.Units(UnitId),
     CONSTRAINT CK_ItemUnitConversions_DateRange CHECK (EffectiveTo IS NULL OR EffectiveTo >= EffectiveFrom)
@@ -1459,6 +1461,7 @@ CREATE TABLE dbo.WmsTaskLines (
     WmsTaskId BIGINT NOT NULL,
     ItemId INT NOT NULL,
     ItemSpecId INT NULL,
+    UnitId INT NOT NULL,
     LotId BIGINT NULL,
     InventoryReservationId BIGINT NULL,
     InventoryUnitId BIGINT NULL,
@@ -1466,11 +1469,16 @@ CREATE TABLE dbo.WmsTaskLines (
     ToLocationId INT NULL,
     QuantityRequired DECIMAL(18,4) NOT NULL,
     QuantityCompleted DECIMAL(18,4) NOT NULL DEFAULT 0,
+    RequestedQuantity DECIMAL(18,4) NULL,
+    RequestedUnitId INT NULL,
+    UnitConversionFactor DECIMAL(18,8) NULL,
     Remark NVARCHAR(1000) NULL,
     PalletNo NVARCHAR(100) NULL,
     CONSTRAINT FK_WmsTaskLines_WmsTasks FOREIGN KEY (WmsTaskId) REFERENCES dbo.WmsTasks(WmsTaskId),
     CONSTRAINT FK_WmsTaskLines_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
     CONSTRAINT FK_WmsTaskLines_ItemSpecs FOREIGN KEY (ItemSpecId) REFERENCES dbo.ItemSpecs(ItemSpecId),
+    CONSTRAINT FK_WmsTaskLines_Units FOREIGN KEY (UnitId) REFERENCES dbo.Units(UnitId),
+    CONSTRAINT FK_WmsTaskLines_RequestedUnits FOREIGN KEY (RequestedUnitId) REFERENCES dbo.Units(UnitId),
     CONSTRAINT FK_WmsTaskLines_Lots FOREIGN KEY (LotId) REFERENCES dbo.Lots(LotId),
     CONSTRAINT FK_WmsTaskLines_Reservations FOREIGN KEY (InventoryReservationId) REFERENCES dbo.InventoryReservations(InventoryReservationId),
     CONSTRAINT FK_WmsTaskLines_InventoryUnits FOREIGN KEY (InventoryUnitId) REFERENCES dbo.InventoryUnits(InventoryUnitId),
@@ -1482,6 +1490,32 @@ CREATE TABLE dbo.WmsTaskLines (
 CREATE INDEX IX_WmsTasks_WaveId_Status ON dbo.WmsTasks (WaveId, Status);
 CREATE INDEX IX_WmsTasks_WarehouseId_Status ON dbo.WmsTasks (WarehouseId, Status);
 CREATE INDEX IX_WmsWaves_Status ON dbo.WmsWaves (Status);
+
+CREATE TABLE dbo.WarehouseIncidents (
+    IncidentId BIGINT IDENTITY(1,1) PRIMARY KEY,
+    IncidentType NVARCHAR(30) NOT NULL,
+    Status NVARCHAR(30) NOT NULL DEFAULT 'pending',
+    WmsTaskId BIGINT NOT NULL,
+    SourceType NVARCHAR(30) NOT NULL,
+    SourceId INT NULL,
+    ItemId INT NOT NULL,
+    ItemSpecId INT NULL,
+    QtyRequired DECIMAL(18, 4) NOT NULL,
+    QtyCompleted DECIMAL(18, 4) NOT NULL,
+    QtyShortage DECIMAL(18, 4) NOT NULL,
+    Condition NVARCHAR(30) NULL,
+    CreatedBy INT NOT NULL,
+    CreatedAt DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    ResolvedBy INT NULL,
+    ResolvedAt DATETIME2 NULL,
+    ResolutionAction NVARCHAR(30) NULL,
+    ResolutionDetails NVARCHAR(1000) NULL,
+    CONSTRAINT FK_WarehouseIncidents_WmsTasks FOREIGN KEY (WmsTaskId) REFERENCES dbo.WmsTasks(WmsTaskId),
+    CONSTRAINT FK_WarehouseIncidents_Items FOREIGN KEY (ItemId) REFERENCES dbo.Items(ItemId),
+    CONSTRAINT FK_WarehouseIncidents_ItemSpecs FOREIGN KEY (ItemSpecId) REFERENCES dbo.ItemSpecs(ItemSpecId),
+    CONSTRAINT FK_WarehouseIncidents_CreatedBy FOREIGN KEY (CreatedBy) REFERENCES dbo.Users(UserId),
+    CONSTRAINT FK_WarehouseIncidents_ResolvedBy FOREIGN KEY (ResolvedBy) REFERENCES dbo.Users(UserId)
+);
 
 CREATE TABLE dbo.DocumentStatusHistory (
     DocumentStatusHistoryId BIGINT IDENTITY(1,1) PRIMARY KEY,
@@ -1832,7 +1866,7 @@ VALUES
     ('cycle_count', N'ตรวจนับสินค้า');
 
 INSERT INTO dbo.Units (UnitCode, UnitName)
-VALUES ('REAM', N'รีม'), ('PALLET', N'พาเลท'), ('PCS', N'ชิ้น'), ('SHEET', N'แผ่น'), ('SQM', N'ตารางเมตร'), ('M3', N'ลูกบาศก์เมตร');
+VALUES ('PACK', N'แพ็ค'), ('PALLET', N'พาเลท'), ('PCS', N'ชิ้น'), ('SHEET', N'แผ่น');
 
 INSERT INTO dbo.UnitConversions (FromUnitId, ToUnitId, ConversionFactor)
 SELECT fu.UnitId, tu.UnitId, 1.00000000

@@ -97,6 +97,18 @@ export default function SalesOrdersTable({
       ),
     },
     {
+      title: 'การจัดส่ง',
+      dataIndex: 'deliveryType',
+      key: 'deliveryType',
+      width: 130,
+      align: 'center',
+      render: (val) => (
+        <Tag color={val === 'pickup' ? 'orange' : 'blue'} className="px-2 py-0.5 rounded text-xs font-semibold">
+          {val === 'pickup' ? 'รับที่สาขา' : 'จัดส่ง'}
+        </Tag>
+      ),
+    },
+    {
       title: 'สถานะ',
       dataIndex: 'status',
       key: 'status',

@@ -2,13 +2,14 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Button, Card, Col, DatePicker, Form, Input, InputNumber, Row,
-  Select, Table, Typography, Space, Divider, Modal, Tag, Empty, Radio, message
+  Select, Table, Typography, Space, Divider, Modal, Tag, Empty, Radio, message, Tooltip
 } from 'antd';
 import {
   SearchOutlined, SortAscendingOutlined, HistoryOutlined,
   PercentageOutlined, CheckCircleOutlined, PrinterOutlined,
   DeleteOutlined, PlusOutlined, SaveOutlined, ClearOutlined,
-  EditOutlined, CloseCircleOutlined, CloseOutlined, SendOutlined
+  EditOutlined, CloseCircleOutlined, CloseOutlined, SendOutlined,
+  TruckOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useMasterData } from '../../context/MasterDataContext';
@@ -16,6 +17,9 @@ import { useCustomer } from '../../context/CustomerContext';
 import { useCompany } from '../../context/CompanyContext';
 import { useQuotation } from '../../context/QuotationContext';
 import { useSalesOrder } from '../../context/SalesOrderContext';
+import { useWms } from '../../context/WmsContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
+import { WarningOutlined, AuditOutlined } from '@ant-design/icons';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -26,6 +30,29 @@ export default function SalesOrderCreate() {
   const cloneId = searchParams.get('cloneId');
   const viewId = searchParams.get('viewId');
   const { lookups, fetchLookups } = useMasterData();
+  const { getWmsIncidents, resolveWmsIncident } = useWms();
+  const { user } = useAuth();
+  const [pendingIncidents, setPendingIncidents] = useState([]);
+  const [isResolveModalOpen, setIsResolveModalOpen] = useState(false);
+  const [resolveAction, setResolveAction] = useState('re_pick');
+  const [resolveDetails, setResolveDetails] = useState('');
+  const [resolving, setResolving] = useState(false);
+
+  const loadSOIncidents = async () => {
+    if (!viewId) return;
+    try {
+      const data = await getWmsIncidents({ status: 'pending', sourceType: 'SO', sourceId: viewId });
+      setPendingIncidents(data || []);
+    } catch (err) {
+      console.error('Failed to load incidents', err);
+    }
+  };
+
+  useEffect(() => {
+    if (viewId) {
+      loadSOIncidents();
+    }
+  }, [viewId]);
   const { getCustomers, getAddresses } = useCustomer();
   const { getBranches } = useCompany();
 
@@ -64,6 +91,7 @@ export default function SalesOrderCreate() {
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [addressesList, setAddressesList] = useState([]);
   const [customAddressEnabled, setCustomAddressEnabled] = useState(false);
+  const [selectedDeliverySlot, setSelectedDeliverySlot] = useState(null);
 
   // Salesperson autocomplete
   const [salespersonSearch, setSalespersonSearch] = useState('');
@@ -151,6 +179,35 @@ export default function SalesOrderCreate() {
         const addresses = await getAddresses(customerObj.id);
         setAddressesList(addresses || []);
 
+        const getSlotTimeRange = (slotNum) => {
+          if (slotNum === 1) return '08:00-10:00';
+          if (slotNum === 2) return '10:00-12:00';
+          if (slotNum === 3) return '13:00-15:00';
+          if (slotNum === 4) return '15:00-17:00';
+          return '';
+        };
+
+        const hasReservation = viewId && !!(soData.deliveryReservationId || soData.DeliveryReservationId);
+        let slotDisplayVal = '';
+        if (hasReservation) {
+          const resId = soData.deliveryReservationId || soData.DeliveryReservationId;
+          const resDate = soData.deliveryReservationDate || soData.DeliveryReservationDate;
+          const resSlot = soData.deliveryReservationSlot || soData.DeliveryReservationSlot;
+          const vehId = soData.deliveryVehicleId || soData.DeliveryVehicleId;
+          const vehPlate = soData.deliveryVehicleLicensePlate || soData.DeliveryVehicleLicensePlate;
+          const slotTime = getSlotTimeRange(resSlot);
+          
+          slotDisplayVal = `${dayjs(resDate).format('DD MMM YYYY')} [Slot ${resSlot}: ${slotTime}] (${vehPlate})`;
+          setSelectedDeliverySlot({
+            reservationId: resId,
+            date: resDate,
+            slotNumber: resSlot,
+            vehicleId: vehId,
+            vehicleLicensePlate: vehPlate,
+            slotTime
+          });
+        }
+
         // 3. Setup form field values
         const formFields = {
           branchId: soData.BranchId || soData.branchId || undefined,
@@ -161,11 +218,13 @@ export default function SalesOrderCreate() {
           paymentTermId: soData.PaymentTermId || soData.paymentTermId || undefined,
           warehouseId: soData.WarehouseId || soData.warehouseId || undefined,
           remarks: soData.Remarks || soData.remarks || '',
+          deliveryType: soData.DeliveryType || soData.deliveryType || 'delivery',
           deliveryLocation: soData.ShippingAddress || soData.shippingAddress ? 'other' : undefined,
           deliveryAddressText: soData.ShippingAddress || soData.shippingAddress || '',
           customerPoId: soData.CustomerPoNo || soData.customerPoNo || '',
           deliveryDate: soData.RequiredDate || soData.requiredDate ? dayjs(soData.RequiredDate || soData.requiredDate) : null,
-          documentDate: viewId ? dayjs(soData.DocumentDate || soData.documentDate) : dayjs()
+          documentDate: viewId ? dayjs(soData.DocumentDate || soData.documentDate) : dayjs(),
+          deliverySlotDisplay: slotDisplayVal
         };
 
         if (soData.ShippingAddress || soData.shippingAddress) {
@@ -425,6 +484,29 @@ export default function SalesOrderCreate() {
         form.setFieldsValue({ deliveryAddressText: formatAddress(addr) });
       }
     }
+  };
+
+  const openDeliveryScheduler = () => {
+    const width = 1050;
+    const height = 750;
+    const left = window.screenX + (window.outerWidth - width) / 2;
+    const top = window.screenY + (window.outerHeight - height) / 2;
+    
+    const resId = selectedDeliverySlot?.reservationId || '';
+    const url = `/salesorder/delivery-scheduler?currentReservationId=${resId}`;
+    
+    window.onSelectDeliverySlot = (slotData) => {
+      setSelectedDeliverySlot(slotData);
+      form.setFieldsValue({
+        deliverySlotDisplay: `${dayjs(slotData.date).format('DD MMM YYYY')} [Slot ${slotData.slotNumber}: ${slotData.slotTime}] (${slotData.vehicleLicensePlate})`
+      });
+    };
+
+    window.open(
+      url,
+      'DeliverySchedulerPopup',
+      `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes,status=yes`
+    );
   };
 
   // Fetch pricing from backend price lookup
@@ -1009,7 +1091,9 @@ export default function SalesOrderCreate() {
         remarks: formValues.remarks || '',
         status: statusVal,
         lines: payloadLines,
-        shippingAddress: formValues.deliveryAddressText || ''
+        shippingAddress: formValues.deliveryAddressText || '',
+        deliveryType: formValues.deliveryType || 'delivery',
+        deliveryReservationId: selectedDeliverySlot?.reservationId || null
       };
 
       if (viewId) {
@@ -1209,8 +1293,34 @@ export default function SalesOrderCreate() {
         </div>
       </div>
 
+      {/* Alert Banner for pending incidents */}
+      {viewId && pendingIncidents.length > 0 && (
+        <Card
+          style={{ borderColor: '#ffe58f', backgroundColor: '#fffbe6', borderRadius: '8px' }}
+          size="small"
+        >
+          <div className="flex items-center justify-between">
+            <Space>
+              <WarningOutlined style={{ color: '#faad14', fontSize: '18px' }} />
+              <Text strong style={{ color: '#d46b08' }}>
+                ตรวจพบปัญหาจัดส่งสินค้าขาดคลัง (Short-pick) จำนวน {pendingIncidents.length} รายการสำหรับใบสั่งขายนี้
+              </Text>
+            </Space>
+            <Button
+              type="primary"
+              size="small"
+              danger
+              icon={<AuditOutlined />}
+              onClick={() => setIsResolveModalOpen(true)}
+            >
+              จัดการปัญหาหยิบขาด
+            </Button>
+          </div>
+        </Card>
+      )}
+
       <div className="space-y-3">
-        <Form form={form} layout="vertical" size="small" disabled={isReadOnly} initialValues={{ documentDate: dayjs(), transactionTypeId: 'VAT7EX' }}>
+        <Form form={form} layout="vertical" size="small" disabled={isReadOnly} initialValues={{ documentDate: dayjs(), transactionTypeId: 'VAT7EX', deliveryType: 'delivery' }}>
           <Row gutter={24}>
 
             {/* Left Column: Form Fields */}
@@ -1369,6 +1479,59 @@ export default function SalesOrderCreate() {
                 <Divider style={{ margin: '12px 0' }} />
 
                 <Row gutter={16}>
+                  <Col xs={24} md={12}>
+                    <Form.Item
+                      name="deliveryType"
+                      label={<span style={{ color: '#1890ff', fontWeight: 'bold' }}>รูปแบบการจัดส่ง/รับสินค้า</span>}
+                      rules={[{ required: true, message: 'โปรดเลือกรูปแบบการส่งสินค้า' }]}
+                      style={{ marginBottom: '12px' }}
+                    >
+                      <Select 
+                        placeholder="เลือกประเภทการจัดส่ง"
+                        onChange={(val) => {
+                          if (val === 'pickup') {
+                            setSelectedDeliverySlot(null);
+                            form.setFieldsValue({ deliverySlotDisplay: '' });
+                          }
+                        }}
+                      >
+                        <Select.Option value="delivery">จัดส่งสินค้า (Delivery)</Select.Option>
+                        <Select.Option value="pickup">รับสินค้าที่สาขา (Branch Pickup)</Select.Option>
+                      </Select>
+                    </Form.Item>
+
+                    <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.deliveryType !== currentValues.deliveryType}>
+                      {({ getFieldValue }) => {
+                        const dType = getFieldValue('deliveryType');
+                        if (dType === 'delivery') {
+                          return (
+                            <Form.Item
+                              label={<span style={{ color: '#1890ff', fontWeight: 'bold' }}>สล็อตเวลาจัดส่งสินค้า</span>}
+                              style={{ marginBottom: '12px' }}
+                            >
+                              <Space.Compact style={{ width: '100%' }}>
+                                <Form.Item name="deliverySlotDisplay" noStyle>
+                                  <Input
+                                    readOnly
+                                    placeholder="คลิกปุ่มรถเพื่อเลือกวันเวลาจัดส่ง..."
+                                    style={{ backgroundColor: '#f5f5f5', color: '#595959', cursor: 'default' }}
+                                  />
+                                </Form.Item>
+                                <Button
+                                  type="primary"
+                                  icon={<TruckOutlined />}
+                                  onClick={openDeliveryScheduler}
+                                  disabled={isReadOnly}
+                                  title="เลือกวันเวลาจัดส่ง"
+                                />
+                              </Space.Compact>
+                            </Form.Item>
+                          );
+                        }
+                        return null;
+                      }}
+                    </Form.Item>
+                  </Col>
                   <Col xs={24} md={12}>
                     <Form.Item
                       name="deliveryLocation"
@@ -1778,7 +1941,7 @@ export default function SalesOrderCreate() {
                   title: 'ราคาหน่วย',
                   dataIndex: 'unitPrice',
                   key: 'unitPrice',
-                  width: 150,
+                  width: 120,
                   render: (val, record) => (
                     <div>
                       <InputNumber
@@ -1790,7 +1953,9 @@ export default function SalesOrderCreate() {
                       />
                       {record.pricingSource && (
                         <div style={{ fontSize: '10px', color: '#bfbfbf', marginTop: '2px' }}>
-                          แหล่งราคา: {record.pricingSource}
+                          แหล่งราคา: <Tooltip title={record.pricingSource}>
+                            <span>ⓘ กดเพื่อดู</span>
+                          </Tooltip>
                         </div>
                       )}
                     </div>
@@ -2097,6 +2262,95 @@ export default function SalesOrderCreate() {
             </Form.Item>
           </div>
         )}
+      </Modal>
+
+      {/* Resolve Incident Modal */}
+      <Modal
+        title={
+          <div className="flex items-center gap-2 border-b pb-2">
+            <AuditOutlined className="text-blue-500 text-lg" />
+            <Title level={4} style={{ margin: 0 }}>แก้ปัญหาสต็อกขาดคลัง (Resolve Short-pick)</Title>
+          </div>
+        }
+        open={isResolveModalOpen}
+        onOk={async () => {
+          if (pendingIncidents.length === 0) return;
+          setResolving(true);
+          try {
+            for (const inc of pendingIncidents) {
+              await resolveWmsIncident(inc.id, {
+                action: resolveAction,
+                details: resolveDetails.trim()
+              });
+            }
+            message.success('จัดการปัญหายอดหยิบขาดสำเร็จเรียบร้อยแล้ว');
+            setIsResolveModalOpen(false);
+            loadSOIncidents();
+          } catch (err) {
+            message.error('จัดการปัญหายอดหยิบขาดล้มเหลว: ' + err.message);
+          } finally {
+            setResolving(false);
+          }
+        }}
+        onCancel={() => setIsResolveModalOpen(false)}
+        okText="ยืนยันการแก้ไข"
+        cancelText="ยกเลิก"
+        confirmLoading={resolving}
+        destroyOnClose
+      >
+        <div className="space-y-4 py-4">
+          <div className="p-3 bg-amber-50 rounded-lg border border-amber-100 text-xs text-amber-800 space-y-1">
+            <Text strong className="text-amber-800">รายการที่พบปัญหา:</Text>
+            <ul className="list-disc list-inside">
+              {pendingIncidents.map(inc => (
+                <li key={inc.id}>
+                  {inc.salesSku || inc.itemCode}: ขาด {Number(inc.qtyShortage).toLocaleString('th-TH')} แผ่น (สั่ง {Number(inc.qtyRequired).toLocaleString('th-TH')} / หยิบจริง {Number(inc.qtyCompleted).toLocaleString('th-TH')})
+                  {inc.condition && inc.condition !== 'good' && (
+                    <span className="ml-1 text-red-500 font-medium">
+                      ({inc.condition === 'damaged' ? 'ชำรุด' : 'สต็อกหาย'})
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="space-y-2">
+            <Text strong block>แนวทางการแก้ไข (Action)</Text>
+            <Radio.Group
+              value={resolveAction}
+              onChange={(e) => setResolveAction(e.target.value)}
+              className="flex flex-col gap-2"
+            >
+              <Radio value="re_pick">
+                <Space direction="vertical" size="0">
+                  <Text strong>สั่งหยิบเพิ่ม (Split & Re-issue Task)</Text>
+                  <Text type="secondary" style={{ fontSize: '12px' }}>
+                    สร้าง Picking Task ใหม่สำหรับชิ้นที่ขาดเพื่อรอการหยิบภายหลัง
+                  </Text>
+                </Space>
+              </Radio>
+              <Radio value="cancel_remaining">
+                <Space direction="vertical" size="0">
+                  <Text strong>ยกเลิกจำนวนค้างส่ง (Cancel Remaining / Release Reservation)</Text>
+                  <Text type="secondary" style={{ fontSize: '12px' }}>
+                    ตัดยอดค้างส่งและปลดล็อกสต็อกในระบบ
+                  </Text>
+                </Space>
+              </Radio>
+            </Radio.Group>
+          </div>
+
+          <div className="space-y-1">
+            <Text strong block>หมายเหตุ (Note)</Text>
+            <Input.TextArea
+              rows={3}
+              placeholder="ระบุหมายเหตุสำหรับการแก้ไขปัญหา..."
+              value={resolveDetails}
+              onChange={(e) => setResolveDetails(e.target.value)}
+            />
+          </div>
+        </div>
       </Modal>
     </div>
   );

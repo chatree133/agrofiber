@@ -113,7 +113,7 @@ router.get(
         do.DeliveryOrderId, do.DocumentNo, do.BranchId,
         do.SalesOrderId, so.DocumentNo AS SalesOrderNo,
         do.CustomerId, c.CustomerCode, c.CustomerName,
-        do.DocumentDate, do.Status, do.ShipToAddress, do.CreatedAt,
+        do.DocumentDate, do.Status, do.ShipToAddress, do.DeliveryType, do.CreatedAt,
         (SELECT COUNT(1) FROM FilteredOrders) AS TotalCount
       FROM FilteredOrders fo
       JOIN dbo.DeliveryOrders do ON do.DeliveryOrderId = fo.DeliveryOrderId
@@ -142,6 +142,7 @@ router.get(
         documentDate: r.DocumentDate,
         status: r.Status,
         shipToAddress: r.ShipToAddress,
+        deliveryType: r.DeliveryType,
         createdAt: r.CreatedAt,
       })),
       pagination: { page, pageSize, total: rows[0]?.TotalCount || 0 },
@@ -192,6 +193,7 @@ router.get(
         status: headerRows[0].Status,
         Status: headerRows[0].Status, // compatibility fallback
         shipToAddress: headerRows[0].ShipToAddress,
+        deliveryType: headerRows[0].DeliveryType,
         createdAt: headerRows[0].CreatedAt,
         lines: linesRows.map(l => ({
           id: l.DeliveryOrderLineId,
@@ -224,6 +226,10 @@ router.post(
     const salesOrderId = parseOptionalId(req.body.salesOrderId, 'salesOrderId');
     const documentDate = parseOptionalDate(req.body.documentDate, 'documentDate') || new Date();
     const shipToAddress = req.body.shipToAddress ? String(req.body.shipToAddress).trim() : null;
+    const deliveryType = req.body.deliveryType ? String(req.body.deliveryType).trim().toLowerCase() : 'delivery';
+    if (deliveryType && !['delivery', 'pickup'].includes(deliveryType)) {
+      throw badRequest("deliveryType must be either 'delivery' or 'pickup'");
+    }
     const status = normalizeEnum(req.body.status, ['draft'], 'status') || 'draft';
 
     const lineSnapshots = buildLineSnapshots(req.body.lines || []);
@@ -242,14 +248,15 @@ router.post(
         headerReq.input('docDate', sql.Date, documentDate);
         headerReq.input('status', sql.NVarChar(30), status);
         headerReq.input('shipToAddress', sql.NVarChar(1000), shipToAddress);
+        headerReq.input('deliveryType', sql.NVarChar(30), deliveryType);
         headerReq.input('createdBy', sql.Int, userId);
 
         const headerRes = await headerReq.query(`
           INSERT INTO dbo.DeliveryOrders (
-            DocumentNo, BranchId, CustomerId, SalesOrderId, DocumentDate, Status, ShipToAddress, CreatedBy
+            DocumentNo, BranchId, CustomerId, SalesOrderId, DocumentDate, Status, ShipToAddress, DeliveryType, CreatedBy
           ) OUTPUT INSERTED.DeliveryOrderId
           VALUES (
-            @docNo, @branchId, @customerId, @salesOrderId, @docDate, @status, @shipToAddress, @createdBy
+            @docNo, @branchId, @customerId, @salesOrderId, @docDate, @status, @shipToAddress, @deliveryType, @createdBy
           )
         `);
         deliveryOrderId = headerRes.recordset[0].DeliveryOrderId;
@@ -661,6 +668,34 @@ router.get(
       ORDER BY ChangedAt DESC, DocumentStatusHistoryId DESC
     `, { inputs: { id: { type: sql.Int, value: doId } } });
     res.json({ data: rows });
+  })
+);
+
+router.put(
+  '/:id',
+  writeRoles,
+  asyncHandler(async (req, res) => {
+    const doId = parseId(req.params.id, 'id');
+    const { shipToAddress, deliveryType } = req.body;
+
+    if (deliveryType && !['delivery', 'pickup'].includes(deliveryType)) {
+      return res.status(400).json({ message: "deliveryType must be either 'delivery' or 'pickup'" });
+    }
+
+    await mssqlQuery('DEFAULT', `
+      UPDATE dbo.DeliveryOrders
+      SET ShipToAddress = COALESCE(@shipToAddress, ShipToAddress),
+          DeliveryType = COALESCE(@deliveryType, DeliveryType)
+      WHERE DeliveryOrderId = @doId
+    `, {
+      inputs: {
+        doId: { type: sql.Int, value: doId },
+        shipToAddress: { type: sql.NVarChar(1000), value: shipToAddress !== undefined ? shipToAddress : null },
+        deliveryType: { type: sql.NVarChar(30), value: deliveryType !== undefined ? deliveryType : null },
+      }
+    });
+
+    res.json({ message: 'Delivery Order updated successfully' });
   })
 );
 

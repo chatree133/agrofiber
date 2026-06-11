@@ -15,6 +15,7 @@ import {
     Modal,
     Tooltip,
     Empty,
+    Segmented,
 } from "antd";
 import {
     DatabaseOutlined,
@@ -44,6 +45,7 @@ export default function StockList() {
 
     // Search & Filter States
     const [searchText, setSearchText] = useState("");
+    const [viewMode, setViewMode] = useState("detail"); // detail | summary
     const [selectedWarehouse, setSelectedWarehouse] = useState(null);
     const [selectedLocation, setSelectedLocation] = useState(null);
     const [includeZero, setIncludeZero] = useState(false);
@@ -79,6 +81,11 @@ export default function StockList() {
     // Fetch locations when warehouse changes
     useEffect(() => {
         const loadLocations = async () => {
+            if (viewMode === "summary") {
+                setLocations([]);
+                setSelectedLocation(null);
+                return;
+            }
             if (!selectedWarehouse) {
                 setLocations([]);
                 setSelectedLocation(null);
@@ -93,7 +100,7 @@ export default function StockList() {
             }
         };
         loadLocations();
-    }, [selectedWarehouse]);
+    }, [selectedWarehouse, viewMode]);
 
     // Fetch stock data
     const fetchStock = async () => {
@@ -102,8 +109,12 @@ export default function StockList() {
             const params = {
                 search: searchText || undefined,
                 warehouseId: selectedWarehouse || undefined,
-                locationId: selectedLocation || undefined,
+                locationId:
+                    viewMode === "detail"
+                        ? selectedLocation || undefined
+                        : undefined,
                 includeZero: includeZero ? "true" : "false",
+                summary: viewMode === "summary" ? "true" : undefined,
             };
             const response = await getStockOnHand(params);
             setStockData(response.data || []);
@@ -116,38 +127,66 @@ export default function StockList() {
 
     useEffect(() => {
         fetchStock();
-    }, [selectedWarehouse, selectedLocation, includeZero]);
+    }, [selectedWarehouse, selectedLocation, includeZero, viewMode]);
 
     const toCsvValue = (value) =>
         `"${String(value ?? "").replaceAll('"', '""')}"`;
 
     const handleExportCsv = () => {
-        const headers = [
-            "สินค้า",
-            "SKU",
-            "คลังสินค้า",
-            "ชื่อคลัง",
-            "ตำแหน่งจัดเก็บ",
-            "LOT",
-            "เกรด",
-            "คงคลังทั้งหมด (Physical)",
-            "ยอดจอง (Reserved)",
-            "พร้อมใช้งาน (Available)",
-        ];
-        const rows = stockData.map((item) => [
-            item.itemName
+        const isSummary = viewMode === "summary";
+        const headers = isSummary
+            ? [
+                  "สินค้า",
+                  "SKU",
+                  "คลังสินค้า",
+                  "ชื่อคลัง",
+                  "คงคลังทั้งหมด (Physical)",
+                  "ยอดจอง (Reserved)",
+                  "พร้อมใช้งาน (Available)",
+              ]
+            : [
+                  "สินค้า",
+                  "SKU",
+                  "คลังสินค้า",
+                  "ชื่อคลัง",
+                  "ตำแหน่งจัดเก็บ",
+                  "LOT",
+                  "เกรด",
+                  "คงคลังทั้งหมด (Physical)",
+                  "ยอดจอง (Reserved)",
+                  "พร้อมใช้งาน (Available)",
+              ];
+
+        const rows = stockData.map((item) => {
+            const itemLabel = item.itemName
                 ? `${item.itemName}${item.specName ? ` - ${item.specName}` : ""}`
-                : "",
-            item.salesSku || "",
-            item.warehouseCode || "",
-            item.warehouseName || "",
-            item.locationCode || "",
-            item.lotNo || "",
-            item.gradeName || "",
-            item.qtyOnHand ?? "",
-            item.qtyReserved ?? "",
-            item.qtyAvailable ?? "",
-        ]);
+                : "";
+
+            if (isSummary) {
+                return [
+                    itemLabel,
+                    item.salesSku || "",
+                    item.warehouseCode || "",
+                    item.warehouseName || "",
+                    item.qtyOnHand ?? "",
+                    item.qtyReserved ?? "",
+                    item.qtyAvailable ?? "",
+                ];
+            }
+
+            return [
+                itemLabel,
+                item.salesSku || "",
+                item.warehouseCode || "",
+                item.warehouseName || "",
+                item.locationCode || "",
+                item.lotNo || "",
+                item.gradeName || "",
+                item.qtyOnHand ?? "",
+                item.qtyReserved ?? "",
+                item.qtyAvailable ?? "",
+            ];
+        });
 
         const csv = [headers, ...rows]
             .map((row) => row.map(toCsvValue).join(","))
@@ -198,6 +237,7 @@ export default function StockList() {
     // Handle reset filters
     const handleResetFilters = () => {
         setSearchText("");
+        setViewMode("detail");
         setSelectedWarehouse(null);
         setSelectedLocation(null);
         setIncludeZero(false);
@@ -227,7 +267,7 @@ export default function StockList() {
         }, [stockData]);
 
     // Main table columns
-    const columns = [
+    const detailColumns = [
         {
             title: "สินค้า",
             key: "itemInfo",
@@ -428,6 +468,54 @@ export default function StockList() {
             ),
         },
     ];
+
+    const summaryColumns = [
+        {
+            title: "สินค้า",
+            key: "itemInfo",
+            sorter: (a, b) => (a.salesSku || "").localeCompare(b.salesSku || ""),
+            render: (_, record) => (
+                <div style={{ display: "flex", flexDirection: "column" }}>
+                    <Text strong style={{ color: "#071d2c" }}>
+                        {record.itemName}
+                        {record.specName ? ` - ${record.specName}` : ""}
+                    </Text>
+                    {record.salesSku && (
+                        <Tag
+                            color="blue"
+                            style={{
+                                marginTop: "4px",
+                                width: "fit-content",
+                                fontSize: "11px",
+                            }}
+                        >
+                            SKU: {record.salesSku}
+                        </Tag>
+                    )}
+                </div>
+            ),
+        },
+        {
+            title: "คลังสินค้า",
+            key: "warehouse",
+            render: (_, record) => (
+                <Space size={4}>
+                    <HomeOutlined style={{ color: "#0b733e" }} />
+                    <Text strong style={{ fontSize: "13px" }}>
+                        {record.warehouseCode}
+                    </Text>
+                    <Text type="secondary" style={{ fontSize: "12px" }}>
+                        {record.warehouseName}
+                    </Text>
+                </Space>
+            ),
+        },
+        ...detailColumns.filter((c) =>
+            ["qtyOnHand", "qtyReserved", "qtyAvailable", "actions"].includes(c.key),
+        ),
+    ];
+
+    const columns = viewMode === "summary" ? summaryColumns : detailColumns;
 
     // Movements Table Columns (Modal)
     const movementColumns = [
@@ -758,10 +846,34 @@ export default function StockList() {
                     border: "1px solid #f0f0f0",
                 }}
             >
+                <div style={{ marginBottom: "12px" }}>
+                    <Segmented
+                        value={viewMode}
+                        onChange={(val) => {
+                            setViewMode(val);
+                            setSelectedLocation(null);
+                        }}
+                        options={[
+                            {
+                                label: "รายละเอียด (Location/Lot)",
+                                value: "detail",
+                            },
+                            {
+                                label: "สรุปขาย (SKU x คลัง)",
+                                value: "summary",
+                            },
+                        ]}
+                        block
+                    />
+                </div>
                 <Row gutter={[16, 16]} align="middle">
                     <Col xs={24} md={5}>
                         <Input
-                            placeholder="ค้นหา รหัส, ชื่อสินค้า, SKU หรือเลขล็อต"
+                            placeholder={
+                                viewMode === "summary"
+                                    ? "ค้นหา รหัส, ชื่อสินค้า หรือ SKU"
+                                    : "ค้นหา รหัส, ชื่อสินค้า, SKU หรือเลขล็อต"
+                            }
                             prefix={
                                 <SearchOutlined style={{ color: "#bfbfbf" }} />
                             }
@@ -789,22 +901,24 @@ export default function StockList() {
                             ))}
                         </Select>
                     </Col>
-                    <Col xs={12} md={5}>
-                        <Select
-                            style={{ width: "100%" }}
-                            placeholder="กรองตามตำแหน่งจัดเก็บ"
-                            allowClear
-                            disabled={!selectedWarehouse}
-                            value={selectedLocation}
-                            onChange={(val) => setSelectedLocation(val)}
-                        >
-                            {locations.map((l) => (
-                                <Select.Option key={l.value} value={l.value}>
-                                    {l.label}
-                                </Select.Option>
-                            ))}
-                        </Select>
-                    </Col>
+                    {viewMode === "detail" ? (
+                        <Col xs={12} md={5}>
+                            <Select
+                                style={{ width: "100%" }}
+                                placeholder="กรองตามตำแหน่งจัดเก็บ"
+                                allowClear
+                                disabled={!selectedWarehouse}
+                                value={selectedLocation}
+                                onChange={(val) => setSelectedLocation(val)}
+                            >
+                                {locations.map((l) => (
+                                    <Select.Option key={l.value} value={l.value}>
+                                        {l.label}
+                                    </Select.Option>
+                                ))}
+                            </Select>
+                        </Col>
+                    ) : <Col xs={12} md={5}></Col>}
                     <Col xs={12} md={4}>
                         <Checkbox
                             checked={includeZero}

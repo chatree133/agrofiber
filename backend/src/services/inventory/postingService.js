@@ -2,6 +2,7 @@ import { sql, mssqlTransaction } from '../../lib/mssql.js';
 import { stockService } from './stockService.js';
 import { costingService } from './costingService.js';
 import { wmsTaskService } from '../wms/wmsTaskService.js';
+import { unitConversionService } from './unitConversionService.js';
 
 function badRequest(message) {
   const error = new Error(message);
@@ -72,9 +73,16 @@ export const postingService = {
       for (const line of lines) {
         if (!line.ReceivedQuantity || line.ReceivedQuantity <= 0) continue;
         
-        const qty = line.ReceivedQuantity;
+        const conversion = await unitConversionService.convertToItemBase(tx, {
+          itemId: line.ItemId,
+          itemSpecId: line.ItemSpecId,
+          fromUnitId: line.UnitId,
+          quantity: line.ReceivedQuantity,
+        });
+        const qty = conversion.baseQuantity;
         const cost = line.UnitCostSnapshot || 0;
-        const totalCost = qty * cost;
+        const totalCost = line.ReceivedQuantity * cost;
+        const baseUnitCost = qty > 0 ? totalCost / qty : 0;
 
         // 3. Insert StockMovement (using stockService)
         const movementId = await stockService.insertStockMovement(tx, {
@@ -88,8 +96,8 @@ export const postingService = {
           lotId: line.LotId,
           lotNo: line.LotNo,
           quantity: qty,
-          unitId: line.UnitId,
-          unitCost: cost,
+          unitId: conversion.baseUnitId,
+          unitCost: baseUnitCost,
           totalCost: totalCost,
           createdBy: userId
         });
@@ -112,7 +120,7 @@ export const postingService = {
           itemSpecId: line.ItemSpecId,
           lotId: line.LotId,
           quantity: qty,
-          unitCost: cost,
+          unitCost: baseUnitCost,
           totalCost: totalCost,
           valuationMethod: 'fifo'
         });
@@ -125,7 +133,7 @@ export const postingService = {
           warehouseId: line.WarehouseId,
           movementId: movementId,
           quantity: qty,
-          unitCost: cost
+          unitCost: baseUnitCost
         });
       }
 
@@ -159,6 +167,7 @@ export const postingService = {
         lines: lines.map(line => ({
           itemId: line.ItemId,
           itemSpecId: line.ItemSpecId,
+          unitId: line.UnitId,
           lotId: line.LotId,
           quantityRequired: line.ReceivedQuantity,
           fromLocationId: stagingLocId, // Staging/Receiving location
@@ -210,13 +219,21 @@ export const postingService = {
         if (!line.IssuedQuantity || line.IssuedQuantity <= 0) continue;
         
         try {
+          const conversion = await unitConversionService.convertToItemBase(tx, {
+            itemId: line.ItemId,
+            itemSpecId: line.ItemSpecId,
+            fromUnitId: line.UnitId,
+            quantity: line.IssuedQuantity
+          });
+          const qty = conversion.baseQuantity;
+
           // 3. Consume FIFO Layers (using costingService)
           const { totalValuationCost, avgUnitCost } = await costingService.consumeFifoLayers(tx, {
             itemId: line.ItemId,
             itemSpecId: line.ItemSpecId,
             warehouseId: line.WarehouseId,
             lotId: line.LotId,
-            quantityToConsume: line.IssuedQuantity
+            quantityToConsume: qty
           });
 
           // 4. Insert StockMovement (using stockService)
@@ -229,8 +246,8 @@ export const postingService = {
             fromWarehouseId: line.WarehouseId,
             fromLocationId: line.LocationId,
             lotId: line.LotId,
-            quantity: -line.IssuedQuantity, // Negative for issue
-            unitId: line.UnitId,
+            quantity: -qty, // Negative for issue
+            unitId: conversion.baseUnitId,
             unitCost: avgUnitCost,
             totalCost: totalValuationCost,
             createdBy: userId
@@ -243,7 +260,7 @@ export const postingService = {
             warehouseId: line.WarehouseId,
             locationId: line.LocationId,
             lotId: line.LotId,
-            quantityDelta: -line.IssuedQuantity
+            quantityDelta: -qty
           });
 
           // 6. Insert Valuation Movement (using costingService)
@@ -252,7 +269,7 @@ export const postingService = {
             itemId: line.ItemId,
             itemSpecId: line.ItemSpecId,
             lotId: line.LotId,
-            quantity: -line.IssuedQuantity,
+            quantity: -qty,
             unitCost: avgUnitCost,
             totalCost: totalValuationCost,
             valuationMethod: 'fifo'

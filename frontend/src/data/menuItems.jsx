@@ -28,17 +28,18 @@ export const navMenus = [
         key: "inventory",
         label: "สินค้าคงคลัง",
         children: [
-            { key: "/inventory/settings", label: "ตั้งค่า" },
-            { key: "/inventory/sales", label: "ขาย" },
-            { key: "/inventory/purchase", label: "ซื้อ" },
-            { key: "/inventory/production", label: "ผลิต" },
+            { key: "/inventory/stock", label: "ยอดคงเหลือ" },
             { key: "/inventory/transfer", label: "เคลื่อนย้ายสินค้า" },
-            { key: "/inventory/reports", label: "รายงาน" },
+            { key: "/inventory/goods-receipts", label: "รับสินค้า (GR)" },
+            { key: "/inventory/goods-issues", label: "จ่ายสินค้า (GI)" },
+            { key: "/inventory/reports", label: "รายงานสินค้า" },
         ],
     },
-    { key: "/wms", label: "WMS" },
-    // { key: '/menu2', label: 'เมนู2' },
-    // { key: '/menu3', label: 'เมนู3' },
+    {
+        key: "/wms",
+        label: "WMS",
+        children: [{ key: "/wms/dashboard", label: "Dashboard" }],
+    },
 ];
 
 export const appMenus = [
@@ -165,27 +166,82 @@ export const appMenus = [
         key: "/wms",
         icon: <AppstoreOutlined />,
         label: "WMS",
-        allowedRoles: ["admin", "user", "warehouse", "warehouse_manager"],
+        allowedRoles: [
+            "admin",
+            "user",
+            "warehouse",
+            "warehouse_manager",
+            "wms",
+        ],
         children: [
             {
                 key: "/wms/dashboard",
                 label: "Dashboard",
-                allowedRoles: ["admin", "warehouse", "warehouse_manager"],
+                allowedRoles: [
+                    "admin",
+                    "warehouse",
+                    "warehouse_manager",
+                    "wms",
+                ],
             },
             {
                 key: "/wms/receiving",
                 label: "รับสินค้าเข้าคลัง",
-                allowedRoles: ["admin", "user", "warehouse", "warehouse_manager"],
+                allowedRoles: [
+                    "admin",
+                    "user",
+                    "warehouse",
+                    "warehouse_manager",
+                    "wms",
+                ],
             },
             {
                 key: "/wms/picking",
                 label: "หยิบสินค้า",
-                allowedRoles: ["admin", "user", "warehouse", "warehouse_manager"],
+                allowedRoles: [
+                    "admin",
+                    "user",
+                    "warehouse",
+                    "warehouse_manager",
+                    "wms",
+                ],
             },
             {
                 key: "/wms/transfers",
                 label: "โอนย้ายสินค้า (สแกน)",
-                allowedRoles: ["admin", "warehouse", "warehouse_manager"],
+                allowedRoles: [
+                    "admin",
+                    "warehouse",
+                    "warehouse_manager",
+                    "wms",
+                ],
+            },
+            {
+                key: "/wms/incidents",
+                label: "รายการหยิบขาด/ปัญหาคลัง",
+                allowedRoles: [
+                    "admin",
+                    "warehouse_manager",
+                    "wms",
+                ],
+            },
+            {
+                key: "/wms/transport-master",
+                label: "บริหารข้อมูลขนส่ง",
+                allowedRoles: [
+                    "admin",
+                    "warehouse_manager",
+                    "wms",
+                ],
+            },
+            {
+                key: "/wms/load-plans",
+                label: "แผนจัดส่งสินค้า (Load Plans)",
+                allowedRoles: [
+                    "admin",
+                    "warehouse_manager",
+                    "wms",
+                ],
             },
             // {
             //     key: "/wms/packing",
@@ -206,13 +262,23 @@ export const appMenus = [
                 allowedRoles: ["admin", "user", "accounting"],
             },
             {
+                key: "/master/conversions",
+                label: "แปลงหน่วย (Conversions)",
+                allowedRoles: ["admin", "user", "accounting"],
+            },
+            {
+                key: "/master/uom",
+                label: "หน่วยนับ (UOM)",
+                allowedRoles: ["admin", "user", "accounting"],
+            },
+            {
                 key: "/master/pricing-policies",
                 label: "ราคาโครงสร้าง-อัพโหลด",
                 allowedRoles: ["admin", "user", "accounting"],
             },
             {
                 key: "/master/pricing-contract",
-                label: "ราคพิเศษ-อัพโหลด",
+                label: "ราคาพิเศษ-อัพโหลด",
                 allowedRoles: ["admin", "user", "accounting"],
             },
             {
@@ -222,7 +288,7 @@ export const appMenus = [
             },
             {
                 key: "/master/pricing-contract-history",
-                label: "ประวัติราคพิเศษ",
+                label: "ประวัติราคาพิเศษ",
                 allowedRoles: ["admin", "user", "accounting"],
             },
             {

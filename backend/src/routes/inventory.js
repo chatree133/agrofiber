@@ -94,8 +94,9 @@ router.post(
       const unitReq = tx.request();
       unitReq.input('unitId', sql.BigInt, inventoryUnitId);
       const unitRes = await unitReq.query(`
-        SELECT iu.InventoryUnitId, iu.ItemId, iu.ItemSpecId, iu.LotId, l.LotNo, iu.WarehouseId, iu.LocationId, iu.QtySheet, iu.PalletNo
+        SELECT iu.InventoryUnitId, iu.ItemId, iu.ItemSpecId, i.UnitId, iu.LotId, l.LotNo, iu.WarehouseId, iu.LocationId, iu.QtySheet, iu.PalletNo
         FROM dbo.InventoryUnits iu
+        JOIN dbo.Items i ON i.ItemId = iu.ItemId
         LEFT JOIN dbo.Lots l ON l.LotId = iu.LotId
         WHERE iu.InventoryUnitId = @unitId
       `);
@@ -187,6 +188,7 @@ router.post(
         lines: [{
           itemId: unit.ItemId,
           itemSpecId: unit.ItemSpecId,
+          unitId: unit.UnitId,
           lotId: unit.LotId,
           inventoryUnitId: unit.InventoryUnitId,
           fromLocationId: sourceLocationId,

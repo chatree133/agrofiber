@@ -12,6 +12,23 @@ function normalize(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+function formatTaskQuantity(line) {
+  const baseQty = Number(line?.quantityRequired || 0).toLocaleString('th-TH');
+  const baseUnit = line?.unitCode || 'PCS';
+  const requestedQty = line?.requestedQuantity;
+  const requestedUnit = line?.requestedUnitCode;
+
+  if (
+    requestedQty != null &&
+    requestedUnit &&
+    (requestedUnit !== baseUnit || Number(requestedQty) !== Number(line?.quantityRequired || 0))
+  ) {
+    return `${Number(requestedQty || 0).toLocaleString('th-TH')} ${requestedUnit} (${baseQty} ${baseUnit})`;
+  }
+
+  return `${baseQty} ${baseUnit}`;
+}
+
 export default function TransferTaskDetail() {
   const { id } = useParams();
   const taskId = Number(id);
@@ -246,7 +263,7 @@ export default function TransferTaskDetail() {
         <div className="flex flex-col gap-2">
           <Text strong>ข้อมูลที่ระบบกำหนด</Text>
           <div className="text-sm text-slate-600">
-            ต้นทาง: {line?.fromLocationCode || '-'} | ปลายทาง: {line?.toLocationCode || '-'} | จำนวน: {line?.quantityRequired || 0}
+            ต้นทาง: {line?.fromLocationCode || '-'} | ปลายทาง: {line?.toLocationCode || '-'} | จำนวน: {formatTaskQuantity(line)}
           </div>
           <div className="text-sm text-slate-600">
             พาเลทปลายทาง (ค่าเริ่มต้น): {line?.palletNo || '-'}

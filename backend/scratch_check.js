@@ -5,21 +5,25 @@ import { sql, mssqlQuery } from './src/lib/mssql.js';
 
 async function main() {
   try {
-    const columns1 = await mssqlQuery('DEFAULT', `
-      SELECT COLUMN_NAME, DATA_TYPE 
-      FROM INFORMATION_SCHEMA.COLUMNS 
-      WHERE TABLE_NAME = 'WarehouseLocations'
+    const vehicles = await mssqlQuery('DEFAULT', `
+      SELECT VehicleId, LicensePlate, VehicleType, MaxWeightKg, MaxVolumeCbm FROM dbo.Vehicles
     `);
-    console.log('WarehouseLocations columns:');
-    console.table(columns1);
+    console.log('Vehicles:');
+    console.table(vehicles);
 
-    const columns2 = await mssqlQuery('DEFAULT', `
+    const drivers = await mssqlQuery('DEFAULT', `
+      SELECT DriverId, DriverName, Phone, PreferredProvince FROM dbo.Drivers
+    `);
+    console.log('Drivers:');
+    console.table(drivers);
+
+    const colCheck = await mssqlQuery('DEFAULT', `
       SELECT COLUMN_NAME, DATA_TYPE 
       FROM INFORMATION_SCHEMA.COLUMNS 
-      WHERE TABLE_NAME = 'Warehouses'
+      WHERE TABLE_NAME = 'SalesOrders' AND COLUMN_NAME = 'DeliveryType'
     `);
-    console.log('Warehouses columns:');
-    console.table(columns2);
+    console.log('SalesOrders columns check:');
+    console.table(colCheck);
 
   } catch (err) {
     console.error(err);

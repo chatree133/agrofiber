@@ -8,6 +8,7 @@ import emailService from '../services/common/emailService.js';
 import { authenticate } from '../middleware/auth.js';
 import { allowRoles } from '../middleware/roles.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
+import { refreshLookupsCache } from './masterData.js';
 
 const router = Router();
 const avatarUploadDir = path.resolve('uploads/avatars');
@@ -361,9 +362,9 @@ router.post(
         .input('roleCode', sql.NVarChar(50), roleCode)
         .input('roleName', sql.NVarChar(100), roleName)
         .query(`
-          INSERT INTO dbo.Roles (RoleCode, RoleName)
+          INSERT INTO dbo.Roles (RoleCode, RoleName, IsActive)
           OUTPUT inserted.RoleId
-          VALUES (@roleCode, @roleName)
+          VALUES (@roleCode, @roleName, 1)
         `);
 
       const roleId = insertResult.recordset[0].RoleId;
@@ -375,6 +376,10 @@ router.post(
         WHERE RoleId = @roleId
       `, {
         inputs: { roleId: { type: sql.Int, value: roleId } },
+      });
+
+      await refreshLookupsCache().catch((err) => {
+        console.error('Failed to refresh lookups cache:', err);
       });
 
       res.status(201).json({ data: rows[0] });
@@ -441,6 +446,10 @@ router.put(
       inputs: { roleId: { type: sql.Int, value: roleId } },
     });
 
+    await refreshLookupsCache().catch((err) => {
+      console.error('Failed to refresh lookups cache:', err);
+    });
+
     res.json({ data: updatedRows[0] });
   }),
 );
@@ -467,6 +476,10 @@ router.delete(
       res.status(404).json({ message: 'Role not found' });
       return;
     }
+
+    await refreshLookupsCache().catch((err) => {
+      console.error('Failed to refresh lookups cache:', err);
+    });
 
     res.status(204).send();
   }),

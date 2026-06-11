@@ -52,6 +52,12 @@ export function WmsProvider({ children }) {
     return res.data;
   };
 
+  const cancelWmsTask = async (taskId, notes = null) => {
+    const payload = notes ? { notes } : {};
+    const res = await ApiClient.post(`/api/wms/tasks/${taskId}/cancel`, payload, { headers: authHeaders });
+    return res.data;
+  };
+
   const confirmWmsTask = async (taskId, payload) => {
     const res = await ApiClient.post(`/api/wms/tasks/${taskId}/confirm`, payload, { headers: authHeaders });
     return res.data;
@@ -77,11 +83,97 @@ export function WmsProvider({ children }) {
     return res.data;
   };
 
+  const getWmsIncidents = async (params = {}) => {
+    const res = await ApiClient.get('/api/wms/incidents', { headers: authHeaders, params });
+    return res.data;
+  };
+
+  const resolveWmsIncident = async (incidentId, payload) => {
+    const res = await ApiClient.post(`/api/wms/incidents/${incidentId}/resolve`, payload, { headers: authHeaders });
+    return res.data;
+  };
+
+  const getLoadPlans = async (params = {}) => {
+    const res = await ApiClient.get('/api/wms/load-plans', { headers: authHeaders, params });
+    return res.data || [];
+  };
+
+  const getLoadPlanDetail = async (planId) => {
+    const res = await ApiClient.get(`/api/wms/load-plans/${planId}`, { headers: authHeaders });
+    return res.data;
+  };
+
+  const updateLoadPlanStatus = async (planId, status) => {
+    const res = await ApiClient.put(`/api/wms/load-plans/${planId}/status`, { status }, { headers: authHeaders });
+    return res.data;
+  };
+
+  const getLoadPlanVehicles = async (params = {}) => {
+    const res = await ApiClient.get('/api/wms/load-plans/vehicles', { headers: authHeaders, params });
+    return res.data || [];
+  };
+
+  const createLoadPlanVehicle = async (payload) => {
+    const res = await ApiClient.post('/api/wms/load-plans/vehicles', payload, { headers: authHeaders });
+    return res.data;
+  };
+
+  const updateLoadPlanVehicle = async (vehicleId, payload) => {
+    const res = await ApiClient.put(`/api/wms/load-plans/vehicles/${vehicleId}`, payload, { headers: authHeaders });
+    return res.data;
+  };
+
+  const getLoadPlanDriverUsers = async () => {
+    const res = await ApiClient.get('/api/wms/load-plans/driver-users', { headers: authHeaders });
+    return res.data || [];
+  };
+
+  const getLoadPlanDrivers = async (params = {}) => {
+    const res = await ApiClient.get('/api/wms/load-plans/drivers', { headers: authHeaders, params });
+    return res.data || [];
+  };
+
+  const createLoadPlanDriver = async (payload) => {
+    const res = await ApiClient.post('/api/wms/load-plans/drivers', payload, { headers: authHeaders });
+    return res.data;
+  };
+
+  const updateLoadPlanDriver = async (driverId, payload) => {
+    const res = await ApiClient.put(`/api/wms/load-plans/drivers/${driverId}`, payload, { headers: authHeaders });
+    return res.data;
+  };
+
+  const getPendingDeliveryOrders = async () => {
+    const res = await ApiClient.get('/api/wms/load-plans/pending-dos', { headers: authHeaders });
+    return res.data || [];
+  };
+
+  const createLoadPlan = async (payload) => {
+    const res = await ApiClient.post('/api/wms/load-plans', payload, { headers: authHeaders });
+    return res.data;
+  };
+
+  const getTodayDriverLoadPlans = async () => {
+    const res = await ApiClient.get('/api/wms/load-plans/drivers/me/today', { headers: authHeaders });
+    return res.data || [];
+  };
+
+  const submitLoadPlanPod = async (lineId, formData) => {
+    const res = await ApiClient.post(`/api/wms/load-plans/lines/${lineId}/pod`, formData, {
+      headers: {
+        ...authHeaders,
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return res.data;
+  };
+
   const value = useMemo(() => ({
     getWmsTasks,
     getWmsTaskDetail,
     claimWmsTask,
     unclaimWmsTask,
+    cancelWmsTask,
     getWmsWaves,
     createWmsWave,
     getWmsWaveDetail,
@@ -91,7 +183,23 @@ export function WmsProvider({ children }) {
     getWarehouseLocations,
     allocateWaveInventory,
     splitWmsTaskLine,
-    getLastLocation
+    getLastLocation,
+    getWmsIncidents,
+    resolveWmsIncident,
+    getLoadPlans,
+    getLoadPlanDetail,
+    updateLoadPlanStatus,
+    getLoadPlanVehicles,
+    createLoadPlanVehicle,
+    updateLoadPlanVehicle,
+    getLoadPlanDriverUsers,
+    getLoadPlanDrivers,
+    createLoadPlanDriver,
+    updateLoadPlanDriver,
+    getPendingDeliveryOrders,
+    createLoadPlan,
+    getTodayDriverLoadPlans,
+    submitLoadPlanPod
   }), [authHeaders]);
 
   return (

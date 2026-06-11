@@ -88,7 +88,7 @@ export const productionOrderService = {
       bomReq.input('prdId', sql.Int, productionOrderId);
       // Fetches required materials from ProductionConsumption table (assuming it's populated on draft)
       const bomRes = await bomReq.query(`
-        SELECT ItemId, PlannedQuantity, LocationId, LotId
+        SELECT ItemId, PlannedQuantity, UnitId, LocationId, LotId
         FROM dbo.ProductionConsumption
         WHERE ProductionOrderId = @prdId
       `);
@@ -103,6 +103,7 @@ export const productionOrderService = {
           assignedTo: null,
           lines: lines.map(line => ({
             itemId: line.ItemId,
+            unitId: line.UnitId,
             lotId: line.LotId,
             quantityRequired: line.PlannedQuantity,
             fromLocationId: line.LocationId, 

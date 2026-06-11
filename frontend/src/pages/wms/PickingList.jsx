@@ -3,12 +3,18 @@ import { Button, Card, Checkbox, Space, Table, Tabs, Tag, Typography, message, P
 import { AppstoreOutlined, PlusOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useWms } from '../../context/WmsContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
 
 const { Title, Text } = Typography;
 
 export default function PickingList() {
   const navigate = useNavigate();
-  const { getWmsTasks, getWmsWaves, createWmsWave } = useWms();
+  const { user } = useAuth();
+  const currentUserId = user?.id;
+  const roles = user?.roles || [];
+  const canForceUnclaim = roles.includes('admin') || roles.includes('warehouse_manager');
+
+  const { getWmsTasks, getWmsWaves, createWmsWave, claimWmsWave, unclaimWmsWave } = useWms();
   const [activeTab, setActiveTab] = useState('waves');
   const [tasks, setTasks] = useState([]);
   const [waves, setWaves] = useState([]);
@@ -46,11 +52,8 @@ export default function PickingList() {
   };
 
   useEffect(() => {
-    if (activeTab === 'tasks') {
-      fetchTasks();
-    } else {
-      fetchWaves();
-    }
+    fetchTasks();
+    fetchWaves();
   }, [activeTab]);
 
   const handleCreateWave = async () => {
@@ -66,6 +69,33 @@ export default function PickingList() {
       fetchWaves();
     } catch (err) {
       message.error('ไม่สามารถสร้าง Wave ได้: ' + err.message);
+    }
+  };
+
+  const handleStartPicking = async (wave) => {
+    if (wave.actionBy && currentUserId && wave.actionBy !== currentUserId) {
+      message.error(`คลื่นงานนี้กำลังถูกดำเนินการโดย ${wave.actionByName || 'ผู้ใช้อื่น'} อยู่แล้ว`);
+      return;
+    }
+
+    try {
+      if (!wave.actionBy) {
+        await claimWmsWave(wave.id);
+        message.success('เริ่มดำเนินการคลื่นงานนี้แล้ว');
+      }
+      navigate(`/wms/waves/${wave.id}`);
+    } catch (err) {
+      message.error('ไม่สามารถเริ่มดำเนินการคลื่นงานนี้ได้: ' + err.message);
+    }
+  };
+
+  const handleUnclaimWave = async (waveId) => {
+    try {
+      await unclaimWmsWave(waveId);
+      message.success('ยกเลิกการดำเนินการคลื่นงานเรียบร้อยแล้ว');
+      fetchWaves();
+    } catch (err) {
+      message.error('ไม่สามารถยกเลิกการดำเนินการคลื่นงานได้: ' + err.message);
     }
   };
 
@@ -153,12 +183,43 @@ export default function PickingList() {
     {
       fixed: 'right',
       title: 'การกระทำ',
+      width: 230,
       key: 'actions',
-      render: (_, r) => (
-        <Button type="primary" size="small" icon={<PlayCircleOutlined />} onClick={() => navigate(`/wms/waves/${r.id}`)}>
-          ดำเนินการหยิบ
-        </Button>
-      ),
+      render: (_, r) => {
+        const isClaimedByOther = r.actionBy && currentUserId && r.actionBy !== currentUserId;
+        const canUnclaim = r.status !== 'completed' && r.actionBy && (r.actionBy === currentUserId || canForceUnclaim);
+        return (
+          <Space>
+            {r.status !== 'completed' ? (
+              <Button
+                type="primary"
+                size="small"
+                icon={<PlayCircleOutlined />}
+                onClick={() => handleStartPicking(r)}
+                disabled={Boolean(isClaimedByOther)}
+              >
+                ดำเนินการหยิบ
+              </Button>
+            ) : (
+              <Button
+                size="small"
+                onClick={() => navigate(`/wms/waves/${r.id}`)}
+              >
+                ดูรายละเอียด
+              </Button>
+            )}
+            {canUnclaim && (
+              <Button
+                size="small"
+                danger
+                onClick={() => handleUnclaimWave(r.id)}
+              >
+                Unclaim
+              </Button>
+            )}
+          </Space>
+        );
+      },
     },
   ];
 

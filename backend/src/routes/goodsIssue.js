@@ -7,6 +7,7 @@ import { allowRoles } from '../middleware/roles.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { goodsIssueService } from '../services/inventory/goodsIssueService.js';
 import { approvalService } from '../services/common/approvalService.js';
+import { unitConversionService } from '../services/inventory/unitConversionService.js';
 
 const router = Router();
 
@@ -299,6 +300,29 @@ function calculateHeaderTotals(lines) {
   }
 
   return { limitSheetTotal, requestedSheetTotal, issuedSheetTotal, palletCountTotal, m3Total };
+}
+
+async function applyConversionQuantities(tx, lines) {
+  for (const line of lines) {
+    const requestedConversion = await unitConversionService.convertToItemBase(tx, {
+      itemId: line.itemId,
+      itemSpecId: line.itemSpecId,
+      fromUnitId: line.unitId,
+      quantity: line.requestedQuantity,
+    });
+    const issuedConversion = await unitConversionService.convertToItemBase(tx, {
+      itemId: line.itemId,
+      itemSpecId: line.itemSpecId,
+      fromUnitId: line.unitId,
+      quantity: line.issuedQuantity,
+    });
+
+    line.requestedSheetQty = requestedConversion.baseQuantity;
+    line.issuedSheetQty = issuedConversion.baseQuantity;
+    if (line.limitSheetQty == null) {
+      line.limitSheetQty = requestedConversion.baseQuantity;
+    }
+  }
 }
 
 async function resolveLineLots(tx, lineSnapshots, userId) {
@@ -609,11 +633,12 @@ router.post(
     const status = normalizeEnum(req.body.status, ['draft', 'requested', 'approved'], 'status') || 'draft';
 
     const lineSnapshots = buildLineSnapshots(req.body.lines);
-    const totals = calculateHeaderTotals(lineSnapshots);
 
     let goodsIssueId;
     try {
       await mssqlTransaction('DEFAULT', async (tx) => {
+        await applyConversionQuantities(tx, lineSnapshots);
+        const totals = calculateHeaderTotals(lineSnapshots);
         const documentNo = await documentService.generateDocumentNumber(tx, 'GI', branchId, requestDate);
 
         const headerReq = new sql.Request(tx);
@@ -738,9 +763,12 @@ router.put(
 
     const replaceLines = req.body.lines !== undefined;
     const lineSnapshots = replaceLines ? buildLineSnapshots(req.body.lines) : null;
-    const totals = lineSnapshots ? calculateHeaderTotals(lineSnapshots) : null;
 
     await mssqlTransaction('DEFAULT', async (tx) => {
+      if (lineSnapshots) {
+        await applyConversionQuantities(tx, lineSnapshots);
+      }
+      const totals = lineSnapshots ? calculateHeaderTotals(lineSnapshots) : null;
       const updateReq = new sql.Request(tx);
       updateReq.input('goodsIssueId', sql.Int, goodsIssueId);
       updateReq.input('goodsIssueTypeId', sql.Int, goodsIssueTypeId);
