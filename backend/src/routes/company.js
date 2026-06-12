@@ -3,6 +3,7 @@ import { mssqlQuery, sql } from '../lib/mssql.js';
 import { authenticate } from '../middleware/auth.js';
 import { allowRoles } from '../middleware/roles.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
+import { logRequestAudit } from '../lib/auditLogger.js';
 
 const router = Router();
 
@@ -31,6 +32,8 @@ function mapBranch(row) {
     branchName: row.BranchName,
     taxBranchCode: row.TaxBranchCode,
     address: row.Address,
+    latitude: row.Latitude,
+    longitude: row.Longitude,
     isHeadOffice: Boolean(row.IsHeadOffice),
     isActive: Boolean(row.IsActive),
   };
@@ -427,6 +430,100 @@ router.delete(
   }),
 );
 
+// System Settings (Generic key-value store)
+function mapSystemSetting(row) {
+  return {
+    settingKey: row.SettingKey,
+    settingValue: row.SettingValue,
+    settingGroup: row.SettingGroup,
+    description: row.Description,
+    updatedAt: row.UpdatedAt,
+    updatedBy: row.UpdatedBy,
+  };
+}
+
+router.get(
+  '/system-settings',
+  asyncHandler(async (req, res) => {
+    const group = req.query.group || null;
+
+    const rows = await mssqlQuery('DEFAULT', `
+      SELECT *
+      FROM dbo.SystemSettings
+      WHERE (@group IS NULL OR SettingGroup = @group)
+      ORDER BY SettingKey
+    `, {
+      inputs: {
+        group: { type: sql.NVarChar(50), value: group },
+      },
+    });
+
+    res.json({
+      data: rows.map(mapSystemSetting),
+    });
+  }),
+);
+
+router.put(
+  '/system-settings',
+  asyncHandler(async (req, res) => {
+    const { settings } = req.body;
+
+    if (!Array.isArray(settings)) {
+      return res.status(400).json({ message: 'settings must be an array of key-value pairs' });
+    }
+
+    const updatedSettings = [];
+
+    for (const item of settings) {
+      const { settingKey, settingValue, settingGroup = null } = item;
+
+      if (!settingKey) {
+        continue;
+      }
+
+      const rows = await mssqlQuery('DEFAULT', `
+        IF EXISTS (SELECT 1 FROM dbo.SystemSettings WHERE SettingKey = @settingKey)
+        BEGIN
+            UPDATE dbo.SystemSettings
+            SET SettingValue = @settingValue, UpdatedAt = SYSUTCDATETIME(), UpdatedBy = @updatedBy
+            OUTPUT inserted.*
+            WHERE SettingKey = @settingKey;
+        END
+        ELSE
+        BEGIN
+            INSERT INTO dbo.SystemSettings (SettingKey, SettingValue, SettingGroup, UpdatedBy)
+            OUTPUT inserted.*
+            VALUES (@settingKey, @settingValue, ISNULL(@settingGroup, 'General'), @updatedBy);
+        END
+      `, {
+        inputs: {
+          settingKey: { type: sql.VarChar(100), value: settingKey },
+          settingValue: { type: sql.NVarChar(sql.MAX), value: settingValue !== undefined ? String(settingValue) : null },
+          settingGroup: { type: sql.VarChar(50), value: settingGroup },
+          updatedBy: { type: sql.NVarChar(100), value: req.user?.username || 'admin' },
+        },
+      });
+
+      if (rows.length > 0) {
+        updatedSettings.push(mapSystemSetting(rows[0]));
+      }
+    }
+
+    await logRequestAudit(req, {
+      module: 'Settings',
+      actionType: 'Update',
+      description: 'Updated system configurations',
+      newValues: settings
+    });
+
+    res.json({
+      message: 'System settings updated successfully',
+      data: updatedSettings,
+    });
+  }),
+);
+
 router.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -670,6 +767,8 @@ router.post(
       branchName,
       taxBranchCode = null,
       address = null,
+      latitude = null,
+      longitude = null,
       isHeadOffice = false,
       isActive = true,
     } = req.body;
@@ -681,6 +780,12 @@ router.post(
       return;
     }
 
+    const parseLatLng = (val) => {
+      if (val === undefined || val === null || val === '') return null;
+      const num = Number(val);
+      return isNaN(num) ? null : num;
+    };
+
     const rows = await mssqlQuery('DEFAULT', `
       INSERT INTO dbo.Branches (
         CompanyId,
@@ -688,6 +793,8 @@ router.post(
         BranchName,
         TaxBranchCode,
         Address,
+        Latitude,
+        Longitude,
         IsHeadOffice,
         IsActive
       )
@@ -698,6 +805,8 @@ router.post(
         @branchName,
         @taxBranchCode,
         @address,
+        @latitude,
+        @longitude,
         @isHeadOffice,
         @isActive
       )
@@ -722,6 +831,14 @@ router.post(
         address: {
           type: sql.NVarChar(1000),
           value: address,
+        },
+        latitude: {
+          type: sql.Decimal(18, 10),
+          value: parseLatLng(latitude),
+        },
+        longitude: {
+          type: sql.Decimal(18, 10),
+          value: parseLatLng(longitude),
         },
         isHeadOffice: {
           type: sql.Bit,
@@ -748,9 +865,17 @@ router.put(
       branchName,
       taxBranchCode,
       address,
+      latitude,
+      longitude,
       isHeadOffice,
       isActive,
     } = req.body;
+
+    const parseLatLng = (val) => {
+      if (val === undefined || val === null || val === '') return null;
+      const num = Number(val);
+      return isNaN(num) ? null : num;
+    };
 
     const updates = [];
     const inputs = {
@@ -773,6 +898,14 @@ router.put(
     if (address !== undefined) {
       updates.push('Address = @address');
       inputs.address = { type: sql.NVarChar(1000), value: address };
+    }
+    if (latitude !== undefined) {
+      updates.push('Latitude = @latitude');
+      inputs.latitude = { type: sql.Decimal(18, 10), value: parseLatLng(latitude) };
+    }
+    if (longitude !== undefined) {
+      updates.push('Longitude = @longitude');
+      inputs.longitude = { type: sql.Decimal(18, 10), value: parseLatLng(longitude) };
     }
     if (isHeadOffice !== undefined) {
       updates.push('IsHeadOffice = @isHeadOffice');

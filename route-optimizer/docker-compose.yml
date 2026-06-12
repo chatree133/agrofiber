@@ -1,0 +1,10 @@
+services:
+  route-api:
+    build: .
+    container_name: route-api
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./app:/workspace/app
+    environment:
+      - PYTHONUNBUFFERED=1

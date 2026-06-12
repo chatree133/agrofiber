@@ -1,7 +1,8 @@
 import { EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Button, Card, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Tag, TimePicker, Typography, message } from 'antd';
+import { Button, Card, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Switch, Table, Tabs, Tag, TimePicker, Typography, message } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { useWms } from '../../context/WmsContext.jsx';
+import { useCompany } from '../../context/CompanyContext.jsx';
 import { useMasterData } from "../../context/MasterDataContext.jsx";
 import dayjs from 'dayjs';
 
@@ -17,11 +18,13 @@ export default function TransportMaster() {
     createLoadPlanDriver,
     updateLoadPlanDriver,
   } = useWms();
+  const { getBranches } = useCompany();
 
   const [activeTab, setActiveTab] = useState('vehicles');
   const [vehicles, setVehicles] = useState([]);
   const [drivers, setDrivers] = useState([]);
   const [users, setUsers] = useState([]);
+  const [branches, setBranches] = useState([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -55,10 +58,15 @@ export default function TransportMaster() {
     setUsers(data);
   };
 
+  const loadBranches = async () => {
+    const data = await getBranches(1);
+    setBranches(data || []);
+  };
+
   const loadData = async () => {
     setLoading(true);
     try {
-      await Promise.all([loadVehicles(), loadDrivers(), loadUsers()]);
+      await Promise.all([loadVehicles(), loadDrivers(), loadUsers(), loadBranches()]);
     } catch (err) {
       message.error(err.response?.data?.message || err.message || 'ไม่สามารถโหลดข้อมูลขนส่งได้');
     } finally {
@@ -82,10 +90,12 @@ export default function TransportMaster() {
           vehicleType: record.VehicleType,
           maxWeightKg: Number(record.MaxWeightKg),
           maxVolumeCbm: Number(record.MaxVolumeCbm),
+          costPerKm: record.CostPerKm !== undefined && record.CostPerKm !== null ? Number(record.CostPerKm) : undefined,
           workingTimeRange: record.WorkingStart && record.WorkingEnd
             ? [dayjs(record.WorkingStart, 'HH:mm'), dayjs(record.WorkingEnd, 'HH:mm')]
             : null,
           isActive: Boolean(record.IsActive),
+          branchId: record.BranchId || undefined,
         });
       } else {
         form.setFieldsValue({
@@ -97,7 +107,7 @@ export default function TransportMaster() {
         });
       }
     } else {
-      form.setFieldsValue({ isActive: true });
+      form.setFieldsValue({ isActive: true, costPerKm: 1.00 });
     }
 
     setModalOpen(true);
@@ -121,9 +131,11 @@ export default function TransportMaster() {
           vehicleType: values.vehicleType,
           maxWeightKg: values.maxWeightKg,
           maxVolumeCbm: values.maxVolumeCbm,
+          costPerKm: values.costPerKm !== undefined && values.costPerKm !== null ? values.costPerKm : null,
           workingStart: start ? start.format('HH:mm') : null,
           workingEnd: end ? end.format('HH:mm') : null,
           isActive: values.isActive,
+          branchId: values.branchId || null,
         };
 
         if (editingRecord) {
@@ -176,6 +188,12 @@ export default function TransportMaster() {
       ),
     },
     { title: 'ทะเบียนรถ', dataIndex: 'LicensePlate', key: 'LicensePlate' },
+    {
+      title: 'สาขาประจำ',
+      dataIndex: 'BranchName',
+      key: 'BranchName',
+      render: (text) => text || '-',
+    },
     { title: 'ประเภทรถ', dataIndex: 'VehicleType', key: 'VehicleType' },
     {
       title: 'น้ำหนักสูงสุด (kg)',
@@ -190,6 +208,13 @@ export default function TransportMaster() {
       key: 'MaxVolumeCbm',
       align: 'right',
       render: (value) => Number(value).toLocaleString(undefined, { maximumFractionDigits: 3 }),
+    },
+    {
+      title: 'ค่าเดินทาง/กม. (บาท)',
+      dataIndex: 'CostPerKm',
+      key: 'CostPerKm',
+      align: 'right',
+      render: (value) => value !== null && value !== undefined ? Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '1.00',
     },
     {
       title: 'เวลาทำงาน',
@@ -295,27 +320,54 @@ export default function TransportMaster() {
         confirmLoading={saving}
         okText="บันทึก"
         cancelText="ยกเลิก"
+        width={activeTab === 'vehicles' ? 700 : 520}
         // destroyOnClose
       >
         <Form form={form} layout="vertical">
           {activeTab === 'vehicles' ? (
-            <>
-              <Form.Item name="licensePlate" label="ทะเบียนรถ" rules={[{ required: true, message: 'กรุณากรอกทะเบียนรถ' }]}>
-                <Input maxLength={30} />
-              </Form.Item>
-              <Form.Item name="vehicleType" label="ประเภทรถ" rules={[{ required: true, message: 'กรุณากรอกประเภทรถ' }]}>
-                <Input maxLength={50} />
-              </Form.Item>
-              <Form.Item name="maxWeightKg" label="น้ำหนักสูงสุด (kg)" rules={[{ required: true, message: 'กรุณากรอกน้ำหนักสูงสุด' }]}>
-                <InputNumber min={0.01} precision={2} style={{ width: '100%' }} />
-              </Form.Item>
-              <Form.Item name="maxVolumeCbm" label="ปริมาตรสูงสุด (CBM)" rules={[{ required: true, message: 'กรุณากรอกปริมาตรสูงสุด' }]}>
-                <InputNumber min={0.01} precision={3} style={{ width: '100%' }} />
-              </Form.Item>
-              <Form.Item name="workingTimeRange" label="เวลาทำงาน">
-                <TimePicker.RangePicker format="HH:mm" style={{ width: '100%' }} placeholder={['เวลาเริ่ม', 'เวลาสิ้นสุด']} />
-              </Form.Item>
-            </>
+            <Row gutter={16}>
+              <Col span={12}>
+                <Form.Item name="licensePlate" label="ทะเบียนรถ" rules={[{ required: true, message: 'กรุณากรอกทะเบียนรถ' }]}>
+                  <Input maxLength={30} />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item name="vehicleType" label="ประเภทรถ" rules={[{ required: true, message: 'กรุณากรอกประเภทรถ' }]}>
+                  <Input maxLength={50} />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item name="maxWeightKg" label="น้ำหนักสูงสุด (kg)" rules={[{ required: true, message: 'กรุณากรอกน้ำหนักสูงสุด' }]}>
+                  <InputNumber min={0.01} precision={2} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item name="maxVolumeCbm" label="ปริมาตรสูงสุด (CBM)" rules={[{ required: true, message: 'กรุณากรอกปริมาตรสูงสุด' }]}>
+                  <InputNumber min={0.01} precision={3} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item name="workingTimeRange" label="เวลาทำงาน">
+                  <TimePicker.RangePicker format="HH:mm" style={{ width: '100%' }} placeholder={['เวลาเริ่ม', 'เวลาสิ้นสุด']} />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item name="costPerKm" label="ค่าเดินทางต่อกม. (บาท)" rules={[{ required: true, message: 'กรุณากรอกค่าเดินทางต่อกม.' }]}>
+                  <InputNumber min={0.00} precision={2} placeholder="เช่น 5.50" style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col span={24}>
+                <Form.Item name="branchId" label="สาขาประจำรถ">
+                  <Select placeholder="เลือกสาขาประจำการของรถ (ออปชั่น)" allowClear style={{ width: '100%' }}>
+                    {branches.map((b) => (
+                      <Select.Option key={b.branchId} value={b.branchId}>
+                        {b.branchCode} - {b.branchName}
+                      </Select.Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+              </Col>
+            </Row>
           ) : (
             <>
               <Form.Item name="userId" label="ผู้ใช้ระบบ" rules={[{ required: true, message: 'กรุณาเลือกผู้ใช้ระบบ' }]}>

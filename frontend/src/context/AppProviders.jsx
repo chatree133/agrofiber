@@ -16,6 +16,7 @@ import { PurchaseOrderProvider } from './PurchaseOrderContext.jsx';
 import { VendorProvider } from './VendorContext.jsx';
 import { StockProvider } from './StockContext.jsx';
 import { DocumentProvider } from './DocumentContext.jsx';
+import { AuditProvider } from './AuditContext.jsx';
 
 // Compose helper to recursively wrap providers in correct order (leftmost = outermost)
 const composeProviders = (...providers) => {
@@ -45,5 +46,6 @@ export const AppProviders = composeProviders(
   PurchaseOrderProvider,
   VendorProvider,
   StockProvider,
-  DocumentProvider
+  DocumentProvider,
+  AuditProvider
 );

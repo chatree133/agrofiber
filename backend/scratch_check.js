@@ -1,30 +1,15 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-import { sql, mssqlQuery } from './src/lib/mssql.js';
+import { mssqlQuery } from './src/lib/mssql.js';
 
 async function main() {
   try {
-    const vehicles = await mssqlQuery('DEFAULT', `
-      SELECT VehicleId, LicensePlate, VehicleType, MaxWeightKg, MaxVolumeCbm FROM dbo.Vehicles
+    const branches = await mssqlQuery('DEFAULT', `
+      SELECT BranchId, BranchName, Latitude, Longitude FROM dbo.Branches
     `);
-    console.log('Vehicles:');
-    console.table(vehicles);
-
-    const drivers = await mssqlQuery('DEFAULT', `
-      SELECT DriverId, DriverName, Phone, PreferredProvince FROM dbo.Drivers
-    `);
-    console.log('Drivers:');
-    console.table(drivers);
-
-    const colCheck = await mssqlQuery('DEFAULT', `
-      SELECT COLUMN_NAME, DATA_TYPE 
-      FROM INFORMATION_SCHEMA.COLUMNS 
-      WHERE TABLE_NAME = 'SalesOrders' AND COLUMN_NAME = 'DeliveryType'
-    `);
-    console.log('SalesOrders columns check:');
-    console.table(colCheck);
-
+    console.log('Branches in database:');
+    console.table(branches);
   } catch (err) {
     console.error(err);
   }

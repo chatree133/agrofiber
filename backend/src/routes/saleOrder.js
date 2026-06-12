@@ -101,6 +101,7 @@ function mapSalesOrder(row) {
         taxId: row.TaxId,
         remarks: row.Remarks,
         shippingAddress: row.ShippingAddress,
+        shippingLatLng: row.ShippingLatLng,
         deliveryType: row.DeliveryType,
         currencyCode: row.CurrencyCode,
         subTotalAmount: row.SubTotalAmount,
@@ -186,6 +187,7 @@ async function getSalesOrder(salesOrderId) {
       so.TaxType,
       so.Remarks,
       so.ShippingAddress,
+      so.ShippingLatLng,
       so.DeliveryType,
       so.CurrencyCode,
       so.SubTotalAmount,
@@ -629,6 +631,9 @@ router.post(
         const shippingAddress = req.body.shippingAddress
             ? String(req.body.shippingAddress).trim()
             : null;
+        const shippingLatLng = req.body.shippingLatLng
+            ? String(req.body.shippingLatLng).trim()
+            : null;
         const deliveryType = req.body.deliveryType
             ? String(req.body.deliveryType).trim().toLowerCase()
             : 'delivery';
@@ -740,6 +745,11 @@ router.post(
                     sql.NVarChar(1000),
                     shippingAddress,
                 );
+                headerReq.input(
+                    "shippingLatLng",
+                    sql.NVarChar(100),
+                    shippingLatLng,
+                );
                 headerReq.input("deliveryType", sql.NVarChar(30), deliveryType);
                 headerReq.input("currencyCode", sql.Char(3), currencyCode);
                 headerReq.input(
@@ -774,45 +784,59 @@ router.post(
                     sql.Decimal(18, 4),
                     totals.grandTotalAmount,
                 );
-                // Validate deliveryReservationId first if provided
-                if (deliveryReservationId) {
-                    const validateRes = await tx.request()
-                        .input("deliveryReservationId", sql.Int, deliveryReservationId)
-                        .query(`
-                            SELECT ReservationId, Status,
-                                   CASE 
-                                     WHEN Status = 'confirmed' THEN 'confirmed'
-                                     WHEN Status = 'reserved' AND ReservedAt >= DATEADD(minute, -10, SYSUTCDATETIME()) THEN 'active_reservation'
-                                     ELSE 'expired'
-                                   END AS BookingStatus
-                            FROM dbo.DeliveryReservations
-                            WHERE ReservationId = @deliveryReservationId
-                        `);
-                    const reservation = validateRes.recordset[0];
-                    if (!reservation || reservation.BookingStatus !== 'active_reservation') {
-                        throw badRequest("ไม่ว่าง-กรุณาเลือกวันและเวลาอื่น");
+                // Handle delivery slot reservation validation or release
+                let targetReservationId = deliveryReservationId;
+                if (deliveryType === 'pickup') {
+                    if (deliveryReservationId) {
+                        await tx.request()
+                            .input("deliveryReservationId", sql.Int, deliveryReservationId)
+                            .query(`
+                                DELETE FROM dbo.DeliveryReservations
+                                WHERE ReservationId = @deliveryReservationId
+                            `);
+                        targetReservationId = null;
+                    }
+                } else {
+                    // Validate deliveryReservationId first if provided
+                    if (deliveryReservationId) {
+                        const validateRes = await tx.request()
+                            .input("deliveryReservationId", sql.Int, deliveryReservationId)
+                            .query(`
+                                SELECT ReservationId, Status,
+                                       CASE 
+                                         WHEN Status = 'confirmed' THEN 'confirmed'
+                                         WHEN Status = 'reserved' AND ReservedAt >= DATEADD(minute, -10, SYSUTCDATETIME()) THEN 'active_reservation'
+                                         ELSE 'expired'
+                                       END AS BookingStatus
+                                FROM dbo.DeliveryReservations
+                                WHERE ReservationId = @deliveryReservationId
+                            `);
+                        const reservation = validateRes.recordset[0];
+                        if (!reservation || reservation.BookingStatus !== 'active_reservation') {
+                            throw badRequest("ไม่ว่าง-กรุณาเลือกวันและเวลาอื่น");
+                        }
                     }
                 }
 
-                headerReq.input("deliveryReservationId", sql.Int, deliveryReservationId);
+                headerReq.input("deliveryReservationId", sql.Int, targetReservationId);
 
                 const headerRes = await headerReq.query(`
                   INSERT INTO dbo.SalesOrders (
                     DocumentNo, BranchId, CustomerId, DocumentDate, RequiredDate,
-                    Status, ShippingAddress, DeliveryType, CustomerPoNo, CustomerPoDate, SalesPersonId, PaymentTermId, PriceListId, WarehouseId, TaxType, Remarks, CurrencyCode, SubTotalAmount, DiscountAmount, TaxAmount, GrandTotalAmount, CreatedBy, DeliveryReservationId
+                    Status, ShippingAddress, ShippingLatLng, DeliveryType, CustomerPoNo, CustomerPoDate, SalesPersonId, PaymentTermId, PriceListId, WarehouseId, TaxType, Remarks, CurrencyCode, SubTotalAmount, DiscountAmount, TaxAmount, GrandTotalAmount, CreatedBy, DeliveryReservationId
                   )
                   OUTPUT INSERTED.SalesOrderId
                   VALUES (
                     @documentNo, @branchId, @customerId, @documentDate, @requiredDate,
-                    @status, @shippingAddress, @deliveryType, @customerPoNo, @customerPoDate, @salesPersonId, @paymentTermId, @priceListId, @warehouseId, @taxType, @remarks, @currencyCode, @subTotalAmount, @discountAmount, @taxAmount, @grandTotalAmount, @createdBy, @deliveryReservationId
+                    @status, @shippingAddress, @shippingLatLng, @deliveryType, @customerPoNo, @customerPoDate, @salesPersonId, @paymentTermId, @priceListId, @warehouseId, @taxType, @remarks, @currencyCode, @subTotalAmount, @discountAmount, @taxAmount, @grandTotalAmount, @createdBy, @deliveryReservationId
                   )
                 `);
                 salesOrderId = headerRes.recordset[0].SalesOrderId;
 
-                // Confirm reservation if provided
-                if (deliveryReservationId) {
+                // Confirm reservation if provided (only for delivery)
+                if (deliveryType !== 'pickup' && targetReservationId) {
                     await tx.request()
-                        .input("deliveryReservationId", sql.Int, deliveryReservationId)
+                        .input("deliveryReservationId", sql.Int, targetReservationId)
                         .input("salesOrderId", sql.Int, salesOrderId)
                         .query(`
                             UPDATE dbo.DeliveryReservations
@@ -1022,6 +1046,12 @@ router.put(
                 : req.body.shippingAddress
                     ? String(req.body.shippingAddress).trim()
                     : null;
+        const shippingLatLng =
+            req.body.shippingLatLng === undefined
+                ? null
+                : req.body.shippingLatLng
+                    ? String(req.body.shippingLatLng).trim()
+                    : null;
         const deliveryType =
             req.body.deliveryType === undefined
                 ? null
@@ -1137,10 +1167,13 @@ router.put(
                     finalStatus = requiresApproval ? "requested" : "approved";
                 }
 
-                // 2. Update Header (within transaction)
-                // Handle delivery slot reservation updates if deliveryReservationId is passed
-                if (deliveryReservationId !== undefined && deliveryReservationId !== existing.deliveryReservationId) {
-                    // 1. Release old reservation
+                // Determine final delivery type
+                const finalDeliveryType = deliveryType !== null ? deliveryType : existing.deliveryType;
+
+                let targetDeliveryReservationId = deliveryReservationId !== undefined ? deliveryReservationId : existing.deliveryReservationId;
+
+                if (finalDeliveryType === 'pickup') {
+                    // 1. Release existing reservation in DB if there is one
                     if (existing.deliveryReservationId) {
                         await tx.request()
                             .input("oldReservationId", sql.Int, existing.deliveryReservationId)
@@ -1149,37 +1182,60 @@ router.put(
                                 WHERE ReservationId = @oldReservationId
                             `);
                     }
-                    
-                    // 2. Validate and confirm new reservation
+                    // 2. Release new reservation in DB if one was passed in body (e.g. from current session)
                     if (deliveryReservationId) {
-                        const validateRes = await tx.request()
-                            .input("deliveryReservationId", sql.Int, deliveryReservationId)
-                            .input("salesOrderId", sql.Int, salesOrderId)
+                        await tx.request()
+                            .input("newReservationId", sql.Int, deliveryReservationId)
                             .query(`
-                                SELECT ReservationId, Status, SalesOrderId,
-                                       CASE 
-                                         WHEN SalesOrderId = @salesOrderId THEN 'ours'
-                                         WHEN Status = 'confirmed' THEN 'confirmed'
-                                         WHEN Status = 'reserved' AND ReservedAt >= DATEADD(minute, -10, SYSUTCDATETIME()) THEN 'active_reservation'
-                                         ELSE 'expired'
-                                       END AS BookingStatus
-                                FROM dbo.DeliveryReservations
-                                WHERE ReservationId = @deliveryReservationId
+                                DELETE FROM dbo.DeliveryReservations 
+                                WHERE ReservationId = @newReservationId
                             `);
-                        const reservation = validateRes.recordset[0];
-                        if (!reservation || (reservation.BookingStatus !== 'active_reservation' && reservation.BookingStatus !== 'ours')) {
-                            throw badRequest("ไม่ว่าง-กรุณาเลือกวันและเวลาอื่น");
+                    }
+                    targetDeliveryReservationId = null;
+                } else {
+                    // If it is 'delivery', handle slot reservation updates normally
+                    if (deliveryReservationId !== undefined && deliveryReservationId !== existing.deliveryReservationId) {
+                        // 1. Release old reservation
+                        if (existing.deliveryReservationId) {
+                            await tx.request()
+                                .input("oldReservationId", sql.Int, existing.deliveryReservationId)
+                                .query(`
+                                    DELETE FROM dbo.DeliveryReservations 
+                                    WHERE ReservationId = @oldReservationId
+                                `);
                         }
                         
-                        // Update reservation to confirmed
-                        await tx.request()
-                            .input("deliveryReservationId", sql.Int, deliveryReservationId)
-                            .input("salesOrderId", sql.Int, salesOrderId)
-                            .query(`
-                                UPDATE dbo.DeliveryReservations
-                                SET Status = 'confirmed', SalesOrderId = @salesOrderId
-                                WHERE ReservationId = @deliveryReservationId
-                            `);
+                        // 2. Validate and confirm new reservation
+                        if (deliveryReservationId) {
+                            const validateRes = await tx.request()
+                                .input("deliveryReservationId", sql.Int, deliveryReservationId)
+                                .input("salesOrderId", sql.Int, salesOrderId)
+                                .query(`
+                                    SELECT ReservationId, Status, SalesOrderId,
+                                           CASE 
+                                             WHEN SalesOrderId = @salesOrderId THEN 'ours'
+                                             WHEN Status = 'confirmed' THEN 'confirmed'
+                                             WHEN Status = 'reserved' AND ReservedAt >= DATEADD(minute, -10, SYSUTCDATETIME()) THEN 'active_reservation'
+                                             ELSE 'expired'
+                                           END AS BookingStatus
+                                    FROM dbo.DeliveryReservations
+                                    WHERE ReservationId = @deliveryReservationId
+                                `);
+                            const reservation = validateRes.recordset[0];
+                            if (!reservation || (reservation.BookingStatus !== 'active_reservation' && reservation.BookingStatus !== 'ours')) {
+                                throw badRequest("ไม่ว่าง-กรุณาเลือกวันและเวลาอื่น");
+                            }
+                            
+                            // Update reservation to confirmed
+                            await tx.request()
+                                .input("deliveryReservationId", sql.Int, deliveryReservationId)
+                                .input("salesOrderId", sql.Int, salesOrderId)
+                                .query(`
+                                    UPDATE dbo.DeliveryReservations
+                                    SET Status = 'confirmed', SalesOrderId = @salesOrderId
+                                    WHERE ReservationId = @deliveryReservationId
+                                `);
+                        }
                     }
                 }
 
@@ -1190,7 +1246,8 @@ router.put(
                 headerReq.input("documentDate", sql.Date, documentDate || existing.documentDate);
                 headerReq.input("requiredDate", sql.Date, requiredDate);
                 headerReq.input("shippingAddress", sql.NVarChar(1000), shippingAddress);
-                headerReq.input("deliveryType", sql.NVarChar(30), deliveryType || existing.deliveryType);
+                headerReq.input("shippingLatLng", sql.NVarChar(100), shippingLatLng);
+                headerReq.input("deliveryType", sql.NVarChar(30), finalDeliveryType);
                 headerReq.input("currencyCode", sql.Char(3), currencyCode || existing.currencyCode);
                 headerReq.input("customerPoNo", sql.NVarChar(100), customerPoNo);
                 headerReq.input("customerPoDate", sql.Date, customerPoDate);
@@ -1205,7 +1262,7 @@ router.put(
                 headerReq.input("taxAmount", sql.Decimal(18, 4), totals?.taxAmount ?? existing.taxAmount);
                 headerReq.input("grandTotalAmount", sql.Decimal(18, 4), totals?.grandTotalAmount ?? existing.grandTotalAmount);
                 headerReq.input("status", sql.NVarChar(30), finalStatus);
-                headerReq.input("deliveryReservationId", sql.Int, deliveryReservationId !== undefined ? deliveryReservationId : existing.deliveryReservationId);
+                headerReq.input("deliveryReservationId", sql.Int, targetDeliveryReservationId);
 
                 await headerReq.query(`
                   UPDATE dbo.SalesOrders
@@ -1215,6 +1272,7 @@ router.put(
                     DocumentDate = @documentDate,
                     RequiredDate = @requiredDate,
                     ShippingAddress = @shippingAddress,
+                    ShippingLatLng = @shippingLatLng,
                     DeliveryType = @deliveryType,
                     CustomerPoNo = @customerPoNo,
                     CustomerPoDate = @customerPoDate,
@@ -1612,11 +1670,19 @@ router.post(
 router.get(
     "/delivery-scheduler/vehicles",
     asyncHandler(async (req, res) => {
-        const vehicles = await mssqlQuery("DEFAULT", `
+        const branchId = req.query.branchId ? parseInt(req.query.branchId, 10) : null;
+        let query = `
             SELECT VehicleId, LicensePlate, VehicleType 
             FROM dbo.Vehicles 
             WHERE IsActive = 1
-        `);
+        `;
+        const inputs = {};
+        if (branchId) {
+            query += " AND (BranchId = @branchId OR BranchId IS NULL)";
+            inputs.branchId = { type: sql.Int, value: branchId };
+        }
+
+        const vehicles = await mssqlQuery("DEFAULT", query, { inputs });
         res.json(vehicles);
     })
 );

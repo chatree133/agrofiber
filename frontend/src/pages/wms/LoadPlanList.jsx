@@ -101,6 +101,12 @@ export default function LoadPlanList() {
       render: (text, r) => <a onClick={() => handleViewDetails(r.id)} style={{ fontWeight: 'bold' }}>{text}</a>
     },
     {
+      title: 'สาขา',
+      dataIndex: 'branchName',
+      key: 'branchName',
+      render: (text) => text || '-'
+    },
+    {
       title: 'วันที่จัดส่ง',
       dataIndex: 'planDate',
       key: 'planDate',
@@ -220,6 +226,7 @@ export default function LoadPlanList() {
                   <div><CalendarOutlined /> วันที่จัดส่ง: {new Date(planDetail.planDate).toLocaleDateString('th-TH')}</div>
                   <div style={{ marginTop: 8 }}>สถานะ: <Tag color={getStatusTagColor(planDetail.status)}>{getStatusText(planDetail.status)}</Tag></div>
                   <div style={{ marginTop: 8 }}>ผู้สร้าง: {planDetail.createdByName}</div>
+                  <div style={{ marginTop: 8 }}>สาขา: {planDetail.branchName || '-'}</div>
                 </Card>
               </Col>
               <Col span={8}>

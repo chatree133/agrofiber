@@ -157,12 +157,14 @@ export default function CompanyForm() {
   });
 
   const handleExportBranches = () => {
-    const header = ['รหัสสาขา', 'ชื่อสาขา', 'รหัสสาขา(สรรพากร)', 'ที่อยู่', 'สำนักงานใหญ่', 'สถานะ'];
+    const header = ['รหัสสาขา', 'ชื่อสาขา', 'รหัสสาขา(สรรพากร)', 'ที่อยู่', 'Latitude', 'Longitude', 'สำนักงานใหญ่', 'สถานะ'];
     const rows = filteredBranches.map((b) => [
       b.branchCode || '',
       b.branchName || '',
       b.taxBranchCode || '',
       b.address || '',
+      b.latitude || '',
+      b.longitude || '',
       b.isHeadOffice ? 'ใช่' : 'ไม่ใช่',
       b.isActive ? 'เปิดใช้' : 'ปิดใช้',
     ]);
@@ -336,6 +338,14 @@ export default function CompanyForm() {
           <Form.Item name="address" label="ที่อยู่สาขา">
             <Input.TextArea rows={2} placeholder="ที่อยู่..." />
           </Form.Item>
+          <div className="grid grid-cols-1 gap-x-6 md:grid-cols-2">
+            <Form.Item name="latitude" label="พิกัด Latitude">
+              <Input placeholder="เช่น 13.7563" />
+            </Form.Item>
+            <Form.Item name="longitude" label="พิกัด Longitude">
+              <Input placeholder="เช่น 100.5018" />
+            </Form.Item>
+          </div>
           <div className="grid grid-cols-1 gap-x-6 md:grid-cols-2">
             <Form.Item name="isHeadOffice" label="เป็นสำนักงานใหญ่" valuePropName="checked">
               <Switch checkedChildren="ใช่" unCheckedChildren="ไม่ใช่" />

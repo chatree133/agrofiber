@@ -21,9 +21,11 @@ import {
     SaveOutlined,
     TruckOutlined,
     ArrowLeftOutlined,
+    PlayCircleOutlined,
 } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { useWms } from "../../context/WmsContext.jsx";
+import { useCompany } from "../../context/CompanyContext.jsx";
 import dayjs from "dayjs";
 
 const { Title, Text, Paragraph } = Typography;
@@ -38,9 +40,12 @@ export default function LoadPlanCreate() {
         getPendingDeliveryOrders,
         createLoadPlan,
     } = useWms();
+    const { getBranches } = useCompany();
 
     const [vehicles, setVehicles] = useState([]);
     const [drivers, setDrivers] = useState([]);
+    const [branches, setBranches] = useState([]);
+    const [selectedBranchId, setSelectedBranchId] = useState(undefined);
     const [pendingDos, setPendingDos] = useState([]);
     const [selectedDos, setSelectedDos] = useState([]); // List of selected DOs in sequence
 
@@ -57,16 +62,39 @@ export default function LoadPlanCreate() {
     const fetchData = async () => {
         setLoading(true);
         try {
-            const [vehicleData, driverData, pendingDoData] = await Promise.all([
+            const [vehicleData, driverData, branchesData] = await Promise.all([
                 getLoadPlanVehicles(),
                 getLoadPlanDrivers(),
-                getPendingDeliveryOrders(),
+                getBranches(1),
             ]);
             setVehicles(vehicleData);
             setDrivers(driverData);
-            setPendingDos(pendingDoData);
+            setBranches(branchesData || []);
         } catch (err) {
             message.error("ไม่สามารถโหลดข้อมูลเบื้องต้นได้: " + err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleBranchChange = async (value) => {
+        setSelectedBranchId(value);
+        setSelectedDos([]); // Reset selected DOs
+        setPendingDos([]); // Clear pending DOs
+        form.setFieldsValue({ vehicleId: undefined }); // Clear selected vehicle
+        setSelectedVehicle(null);
+        if (!value) return;
+
+        setLoading(true);
+        try {
+            const [pendingDoData, vehicleData] = await Promise.all([
+                getPendingDeliveryOrders(value),
+                getLoadPlanVehicles({ branchId: value }),
+            ]);
+            setPendingDos(pendingDoData || []);
+            setVehicles(vehicleData || []);
+        } catch (err) {
+            message.error("ไม่สามารถโหลดข้อมูลใบนำส่งหรือยานพาหนะได้: " + err.message);
         } finally {
             setLoading(false);
         }
@@ -136,6 +164,34 @@ export default function LoadPlanCreate() {
         setSelectedVehicle(v);
     };
 
+    const handleOptimizeClick = () => {
+        const branchVal = form.getFieldValue("branchId");
+        const dateVal = form.getFieldValue("planDate");
+
+        if (!branchVal) {
+            message.error("กรุณาเลือกสาขาจัดส่งก่อนทำการประมวลผลด้วย AI");
+            return;
+        }
+        if (!dateVal) {
+            message.error("กรุณาเลือกวันที่จัดส่งก่อนทำการประมวลผลด้วย AI");
+            return;
+        }
+
+        const dateStr = dateVal.format("YYYY-MM-DD");
+        
+        // Open Bot optimizer page in a centered popup window
+        const width = 1100;
+        const height = 750;
+        const left = (window.screen.width - width) / 2;
+        const top = (window.screen.height - height) / 2;
+        
+        window.open(
+            `/wms/load-plans/bot?date=${dateStr}&branch=${branchVal}`,
+            "LoadPlanBotWindow",
+            `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes,status=yes`
+        );
+    };
+
     const handleSubmit = async (values) => {
         if (selectedDos.length === 0) {
             message.error(
@@ -158,6 +214,7 @@ export default function LoadPlanCreate() {
                 driverId: values.driverId,
                 remarks: values.remarks,
                 deliveryOrderIds: selectedDos.map((item) => item.id),
+                branchId: selectedBranchId,
             };
 
             await createLoadPlan(payload);
@@ -293,27 +350,50 @@ export default function LoadPlanCreate() {
                             initialValues={{ planDate: dayjs() }}
                         >
                             <Row gutter={16}>
-                                <Col span={12}>
-                                    <Form.Item
-                                        name="planDate"
-                                        label="วันที่จัดส่ง"
-                                        rules={[
-                                            {
-                                                required: true,
-                                                message:
-                                                    "กรุณาเลือกวันที่จัดส่ง",
-                                            },
-                                        ]}
+                                <Col span={12}><Form.Item
+                                    name="branchId"
+                                    label="สาขาจัดส่ง"
+                                    rules={[
+                                        {
+                                            required: true,
+                                            message: "กรุณาเลือกสาขาจัดส่ง",
+                                        },
+                                    ]}
+                                >
+                                    <Select
+                                        placeholder="เลือกสาขาเพื่อโหลดรายการจัดส่ง"
+                                        onChange={handleBranchChange}
+                                        style={{ borderRadius: 6 }}
                                     >
-                                        <DatePicker
-                                            style={{
-                                                width: "100%",
-                                                borderRadius: 6,
-                                            }}
-                                            format="YYYY-MM-DD"
-                                        />
-                                    </Form.Item>
-                                </Col>
+                                        {branches.map((b) => (
+                                            <Option key={b.branchId} value={b.branchId}>
+                                                {b.branchCode} - {b.branchName}
+                                            </Option>
+                                        ))}
+                                    </Select>
+                                </Form.Item></Col>
+                                <Col span={12}>                                    <Form.Item
+                                    name="planDate"
+                                    label="วันที่จัดส่ง"
+                                    rules={[
+                                        {
+                                            required: true,
+                                            message:
+                                                "กรุณาเลือกวันที่จัดส่ง",
+                                        },
+                                    ]}
+                                >
+                                    <DatePicker
+                                        style={{
+                                            width: "100%",
+                                            borderRadius: 6,
+                                        }}
+                                        format="YYYY-MM-DD"
+                                    />
+                                </Form.Item></Col>
+                            </Row>
+
+                            <Row gutter={16}>
                                 <Col span={12}>
                                     <Form.Item
                                         name="vehicleId"
@@ -328,6 +408,7 @@ export default function LoadPlanCreate() {
                                         <Select
                                             placeholder="เลือกรถจัดส่ง"
                                             onChange={handleVehicleChange}
+                                            disabled={!selectedBranchId}
                                             style={{ borderRadius: 6 }}
                                         >
                                             {vehicles.map((v) => (
@@ -342,35 +423,37 @@ export default function LoadPlanCreate() {
                                         </Select>
                                     </Form.Item>
                                 </Col>
+                                <Col span={12}>
+                                    <Form.Item
+                                        name="driverId"
+                                        label="พนักงานขับรถ"
+                                        rules={[
+                                            {
+                                                required: true,
+                                                message: "กรุณาเลือกพนักงานขับรถ",
+                                            },
+                                        ]}
+                                    >
+                                        <Select
+                                            placeholder="เลือกคนขับรถ"
+                                            style={{ borderRadius: 6 }}
+                                        >
+                                            {drivers.map((d) => (
+                                                <Option
+                                                    key={d.DriverId}
+                                                    value={d.DriverId}
+                                                >
+                                                    {d.DriverName} (เขตพื้นที่วิ่ง:{" "}
+                                                    {d.PreferredProvince ||
+                                                        "ทุกจังหวัด"}
+                                                    )
+                                                </Option>
+                                            ))}
+                                        </Select>
+                                    </Form.Item>
+                                </Col>
                             </Row>
 
-                            <Form.Item
-                                name="driverId"
-                                label="พนักงานขับรถ"
-                                rules={[
-                                    {
-                                        required: true,
-                                        message: "กรุณาเลือกพนักงานขับรถ",
-                                    },
-                                ]}
-                            >
-                                <Select
-                                    placeholder="เลือกคนขับรถ"
-                                    style={{ borderRadius: 6 }}
-                                >
-                                    {drivers.map((d) => (
-                                        <Option
-                                            key={d.DriverId}
-                                            value={d.DriverId}
-                                        >
-                                            {d.DriverName} (เขตพื้นที่วิ่ง:{" "}
-                                            {d.PreferredProvince ||
-                                                "ทุกจังหวัด"}
-                                            )
-                                        </Option>
-                                    ))}
-                                </Select>
-                            </Form.Item>
 
                             <Form.Item
                                 name="remarks"
@@ -486,22 +569,39 @@ export default function LoadPlanCreate() {
                             <Form.Item
                                 style={{ marginTop: 24, marginBottom: 0 }}
                             >
-                                <Button
-                                    type="primary"
-                                    htmlType="submit"
-                                    icon={<SaveOutlined />}
-                                    loading={saving}
-                                    style={{
-                                        width: "100%",
-                                        height: 42,
-                                        background: "#0f766e",
-                                        borderColor: "#0f766e",
-                                        borderRadius: 6,
-                                        fontWeight: 600,
-                                    }}
-                                >
-                                    บันทึกแผนจัดส่ง
-                                </Button>
+                                <div style={{ display: "flex", gap: 12 }}>
+                                    <Button
+                                        type="primary"
+                                        htmlType="submit"
+                                        icon={<SaveOutlined />}
+                                        loading={saving}
+                                        style={{
+                                            flex: 1,
+                                            height: 42,
+                                            background: "#0f766e",
+                                            borderColor: "#0f766e",
+                                            borderRadius: 6,
+                                            fontWeight: 600,
+                                        }}
+                                    >
+                                        บันทึกแผนจัดส่ง
+                                    </Button>
+                                    <Button
+                                        type="primary"
+                                        icon={<PlayCircleOutlined />}
+                                        onClick={handleOptimizeClick}
+                                        style={{
+                                            flex: 1,
+                                            height: 42,
+                                            background: "linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)",
+                                            borderColor: "#4f46e5",
+                                            borderRadius: 6,
+                                            fontWeight: 600,
+                                        }}
+                                    >
+                                        ประมวลผลด้วย AI
+                                    </Button>
+                                </div>
                             </Form.Item>
                         </Form>
                     </Card>

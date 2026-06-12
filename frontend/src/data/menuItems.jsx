@@ -10,7 +10,7 @@ import {
     ShopOutlined,
     ShoppingCartOutlined,
     StarOutlined,
-    SwapOutlined,
+    ScheduleOutlined,
     TeamOutlined,
     TruckOutlined,
 } from "@ant-design/icons";
@@ -113,7 +113,7 @@ export const appMenus = [
     },
     {
         key: "/deliveryorder",
-        icon: <TruckOutlined />,
+        icon: <ScheduleOutlined />,
         label: "ใบส่งสินค้า (Delivery Order)",
         allowedRoles: ["admin", "user"],
         children: [
@@ -225,6 +225,23 @@ export const appMenus = [
                     "wms",
                 ],
             },
+            // {
+            //     key: "/wms/packing",
+            //     label: "แพ็คสินค้า",
+            //     allowedRoles: ["admin", "user"],
+            // },
+        ],
+    },
+    {
+        key: "/transportation",
+        icon: <TruckOutlined />,
+        label: "การขนส่ง",
+        allowedRoles: [
+            "admin",
+            "warehouse_manager",
+            "wms",
+        ],
+        children: [
             {
                 key: "/wms/transport-master",
                 label: "บริหารข้อมูลขนส่ง",
@@ -243,11 +260,6 @@ export const appMenus = [
                     "wms",
                 ],
             },
-            // {
-            //     key: "/wms/packing",
-            //     label: "แพ็คสินค้า",
-            //     allowedRoles: ["admin", "user"],
-            // },
         ],
     },
     {
@@ -381,8 +393,8 @@ export const appMenus = [
                 allowedRoles: ["admin"],
             },
             {
-                key: "/settings/smtp",
-                label: "SMTP",
+                key: "/settings/system",
+                label: "ตั้งค่าระบบ",
                 allowedRoles: ["admin"],
             },
         ],

@@ -1,0 +1,48 @@
+{
+  "depot": {
+    "lat": 13.544748379,
+    "lng": 100.9618658096,
+    "branchName": "สำนักงานใหญ่"
+  },
+  "vehicles": [
+    {
+      "id": "1",
+      "weight_capacity": 1500,
+      "volume_capacity": 10,
+      "start_time_min": 480,
+      "end_time_min": 1020,
+      "cost_per_km": 5.0
+    },
+    {
+      "id": "2",
+      "weight_capacity": 4500,
+      "volume_capacity": 25,
+      "start_time_min": 480,
+      "end_time_min": 1020,
+      "cost_per_km": 8.0
+    },
+    {
+      "id": "3",
+      "weight_capacity": 15000,
+      "volume_capacity": 50,
+      "start_time_min": 780,
+      "end_time_min": 1020,
+      "cost_per_km": 15.0
+    }
+  ],
+  "orders": [
+    {
+      "id": "DO-2026-0005",
+      "deliveryOrderId": 1,
+      "lat": 14.1339332,
+      "lng": 101.3720705,
+      "weight": 20.629224,
+      "volume": 0.026791,
+      "priority": 1,
+      "time_window_start_min": 0,
+      "time_window_end_min": 1440,
+      "service_time_min": 30,
+      "shippingAddress": "เลขที่ 60 หมู่ที่ 14 ถนนสุวรรณศร ตำบลบ้านพระ อำเภอเมืองปราจีนบุรี จังหวัดปราจีนบุรี 25230"
+    }
+  ]
+}

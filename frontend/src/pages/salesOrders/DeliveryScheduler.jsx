@@ -9,8 +9,7 @@ import {
   CheckOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import ApiClient from '../../context/Api';
-import { useAuth } from '../../context/AuthContext.jsx';
+import { useSalesOrder } from '../../context/SalesOrderContext.jsx';
 
 const { Title, Text } = Typography;
 
@@ -22,7 +21,7 @@ const SLOTS = [
 ];
 
 export default function DeliveryScheduler() {
-  const { authHeaders } = useAuth();
+  const { getSchedulerVehicles, getSchedulerSlots, reserveSchedulerSlot } = useSalesOrder();
   const [vehicles, setVehicles] = useState([]);
   const [selectedVehicleId, setSelectedVehicleId] = useState(null);
   const [currentStartDate, setCurrentStartDate] = useState(() => dayjs().startOf('week'));
@@ -31,14 +30,18 @@ export default function DeliveryScheduler() {
   const [loading, setLoading] = useState(false);
   const [vehiclesLoading, setVehiclesLoading] = useState(true);
 
-  // Extract currentReservationId from URL
+  // Extract currentReservationId and branch from URL
   const currentReservationId = new URLSearchParams(window.location.search).get('currentReservationId');
+  const branchId = new URLSearchParams(window.location.search).get('branch');
+
+  const showOverlay = !vehiclesLoading && (!branchId || vehicles.length === 0);
 
   // 1. Fetch active vehicles
   useEffect(() => {
     async function loadVehicles() {
       try {
-        const res = await ApiClient.get('/api/sale-orders/delivery-scheduler/vehicles', { headers: authHeaders });
+        const params = branchId ? { branchId } : {};
+        const res = await getSchedulerVehicles(params);
         setVehicles(res || []);
         if (res && res.length > 0) {
           setSelectedVehicleId(res[0].VehicleId);
@@ -51,19 +54,16 @@ export default function DeliveryScheduler() {
       }
     }
     loadVehicles();
-  }, [authHeaders]);
+  }, [getSchedulerVehicles, branchId]);
 
   // 2. Fetch slot reservations for selected vehicle and date range
   const loadSlots = async () => {
     if (!selectedVehicleId) return;
     setLoading(true);
     try {
-      const res = await ApiClient.get('/api/sale-orders/delivery-scheduler/slots', {
-        params: {
-          vehicleId: selectedVehicleId,
-          startDate: currentStartDate.format('YYYY-MM-DD')
-        },
-        headers: authHeaders
+      const res = await getSchedulerSlots({
+        vehicleId: selectedVehicleId,
+        startDate: currentStartDate.format('YYYY-MM-DD')
       });
       setReservations(res || []);
     } catch (err) {
@@ -114,12 +114,12 @@ export default function DeliveryScheduler() {
       // Second click: confirm and save reservation!
       setLoading(true);
       try {
-        const res = await ApiClient.post('/api/sale-orders/delivery-scheduler/reserve', {
+        const res = await reserveSchedulerSlot({
           vehicleId: selectedVehicleId,
           reservationDate: dateStr,
           slotNumber,
           oldReservationId: currentReservationId ? parseInt(currentReservationId) : null
-        }, { headers: authHeaders });
+        });
 
         if (res && res.success) {
           message.success('จองสล็อตเวลาจัดส่งสำเร็จ!');
@@ -237,7 +237,30 @@ export default function DeliveryScheduler() {
               <Spin size="large" tip="กำลังโหลดตารางสล็อตเวลา..." />
             </div>
           ) : (
-            <div style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
+            <div style={{ position: 'relative', border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
+              {showOverlay && (
+                <div style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  background: 'rgba(255, 255, 255, 0.85)',
+                  backdropFilter: 'blur(4px)',
+                  zIndex: 50,
+                  display: 'flex',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  padding: '20px'
+                }}>
+                  <Alert
+                    message="ไม่ได้เลือกสาขาหรือไม่มีรายการรถบรรทุก"
+                    type="warning"
+                    showIcon
+                    style={{ fontSize: '16px', fontWeight: '500', borderRadius: '8px', padding: '16px 24px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}
+                  />
+                </div>
+              )}
               {/* Sun - Sat Headers */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', background: '#cbd5e1', borderBottom: '1px solid #cbd5e1', textAlign: 'center', fontWeight: 'bold' }}>
                 {['อาทิตย์ (Sun)', 'จันทร์ (Mon)', 'อังคาร (Tue)', 'พุธ (Wed)', 'พฤหัสบดี (Thu)', 'ศุกร์ (Fri)', 'เสาร์ (Sat)'].map((day, idx) => (

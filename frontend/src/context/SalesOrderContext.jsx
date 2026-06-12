@@ -67,6 +67,21 @@ export function SalesOrderProvider({ children }) {
     return res;
   };
 
+  const getSchedulerVehicles = async (params = {}) => {
+    const res = await ApiClient.get('/api/sale-orders/delivery-scheduler/vehicles', { headers: authHeaders, params });
+    return res;
+  };
+
+  const getSchedulerSlots = async (params = {}) => {
+    const res = await ApiClient.get('/api/sale-orders/delivery-scheduler/slots', { headers: authHeaders, params });
+    return res;
+  };
+
+  const reserveSchedulerSlot = async (payload) => {
+    const res = await ApiClient.post('/api/sale-orders/delivery-scheduler/reserve', payload, { headers: authHeaders });
+    return res;
+  };
+
   const value = useMemo(() => ({
     getSalespersons,
     getPriceLookup,
@@ -77,7 +92,10 @@ export function SalesOrderProvider({ children }) {
     updateSalesOrder,
     requestApproval,
     getSalesOrders,
-    cancelSalesOrder
+    cancelSalesOrder,
+    getSchedulerVehicles,
+    getSchedulerSlots,
+    reserveSchedulerSlot
   }), [authHeaders]);
 
   return (

@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/auth.js';
 import { allowRoles } from '../middleware/roles.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { sql, mssqlQuery, mssqlTransaction } from '../lib/mssql.js';
+import { logRequestAudit } from '../lib/auditLogger.js';
 
 // Ensure directories exist
 const uploadDir = path.resolve('src/public/uploads/pod_photos');
@@ -92,12 +93,33 @@ function formatTime(timeVal) {
 // 1. Get active vehicles
 router.get('/vehicles', dispatcherRoles, asyncHandler(async (req, res) => {
   const includeInactive = parseBoolean(req.query.includeInactive, false);
-  const rows = await mssqlQuery('DEFAULT', `
-    SELECT VehicleId, LicensePlate, VehicleType, MaxWeightKg, MaxVolumeCbm, WorkingStart, WorkingEnd, IsActive
-    FROM dbo.Vehicles
-    ${includeInactive ? '' : 'WHERE IsActive = 1'}
-    ORDER BY LicensePlate
-  `);
+  const branchId = req.query.branchId ? parseInt(req.query.branchId, 10) : null;
+
+  let query = `
+    SELECT v.VehicleId, v.LicensePlate, v.VehicleType, v.MaxWeightKg, v.MaxVolumeCbm, v.WorkingStart, v.WorkingEnd, v.IsActive, v.BranchId, b.BranchName, v.CostPerKm
+    FROM dbo.Vehicles v
+    LEFT JOIN dbo.Branches b ON b.BranchId = v.BranchId
+  `;
+
+  const conditions = [];
+  const inputs = {};
+
+  if (!includeInactive) {
+    conditions.push('v.IsActive = 1');
+  }
+  if (branchId) {
+    conditions.push('(v.BranchId = @branchId OR v.BranchId IS NULL)');
+    inputs.branchId = { type: sql.Int, value: branchId };
+  }
+
+  if (conditions.length) {
+    query += ' WHERE ' + conditions.join(' AND ');
+  }
+
+  query += ' ORDER BY v.LicensePlate';
+
+  const rows = await mssqlQuery('DEFAULT', query, { inputs });
+
   res.json({
     data: rows.map(r => ({
       ...r,
@@ -125,9 +147,14 @@ router.post('/vehicles', dispatcherRoles, asyncHandler(async (req, res) => {
   const workingStart = req.body.workingStart ? String(req.body.workingStart).trim() : null;
   const workingEnd = req.body.workingEnd ? String(req.body.workingEnd).trim() : null;
   const isActive = parseBoolean(req.body.isActive, true);
+  const branchId = req.body.branchId ? parseInt(req.body.branchId, 10) : null;
+  const costPerKm = req.body.costPerKm !== undefined && req.body.costPerKm !== null ? Number(req.body.costPerKm) : null;
 
   if (!licensePlate) return res.status(400).json({ message: 'licensePlate is required' });
   if (!vehicleType) return res.status(400).json({ message: 'vehicleType is required' });
+  if (costPerKm !== null && (isNaN(costPerKm) || costPerKm < 0)) {
+    return res.status(400).json({ message: 'costPerKm must be a non-negative number' });
+  }
 
   // Time format validation
   const timeRegex = /^([0-1][0-9]|2[0-3]):[0-5][0-9]$/;
@@ -151,9 +178,9 @@ router.post('/vehicles', dispatcherRoles, asyncHandler(async (req, res) => {
   if (exists.length) return res.status(409).json({ message: 'License plate already exists' });
 
   const rows = await mssqlQuery('DEFAULT', `
-    INSERT INTO dbo.Vehicles (LicensePlate, VehicleType, MaxWeightKg, MaxVolumeCbm, WorkingStart, WorkingEnd, IsActive)
-    OUTPUT inserted.VehicleId, inserted.LicensePlate, inserted.VehicleType, inserted.MaxWeightKg, inserted.MaxVolumeCbm, inserted.WorkingStart, inserted.WorkingEnd, inserted.IsActive
-    VALUES (@licensePlate, @vehicleType, @maxWeightKg, @maxVolumeCbm, @workingStart, @workingEnd, @isActive)
+    INSERT INTO dbo.Vehicles (LicensePlate, VehicleType, MaxWeightKg, MaxVolumeCbm, WorkingStart, WorkingEnd, IsActive, BranchId, CostPerKm)
+    OUTPUT inserted.VehicleId, inserted.LicensePlate, inserted.VehicleType, inserted.MaxWeightKg, inserted.MaxVolumeCbm, inserted.WorkingStart, inserted.WorkingEnd, inserted.IsActive, inserted.BranchId, inserted.CostPerKm
+    VALUES (@licensePlate, @vehicleType, @maxWeightKg, @maxVolumeCbm, @workingStart, @workingEnd, @isActive, @branchId, @costPerKm)
   `, {
     inputs: {
       licensePlate: { type: sql.NVarChar(30), value: licensePlate },
@@ -163,6 +190,8 @@ router.post('/vehicles', dispatcherRoles, asyncHandler(async (req, res) => {
       workingStart: { type: sql.VarChar(5), value: workingStart },
       workingEnd: { type: sql.VarChar(5), value: workingEnd },
       isActive: { type: sql.Bit, value: isActive },
+      branchId: { type: sql.Int, value: branchId },
+      costPerKm: { type: sql.Decimal(18, 2), value: costPerKm },
     },
   });
 
@@ -184,9 +213,14 @@ router.put('/vehicles/:vehicleId', dispatcherRoles, asyncHandler(async (req, res
   const workingStart = req.body.workingStart ? String(req.body.workingStart).trim() : null;
   const workingEnd = req.body.workingEnd ? String(req.body.workingEnd).trim() : null;
   const isActive = parseBoolean(req.body.isActive, true);
+  const branchId = req.body.branchId ? parseInt(req.body.branchId, 10) : null;
+  const costPerKm = req.body.costPerKm !== undefined && req.body.costPerKm !== null ? Number(req.body.costPerKm) : null;
 
   if (!licensePlate) return res.status(400).json({ message: 'licensePlate is required' });
   if (!vehicleType) return res.status(400).json({ message: 'vehicleType is required' });
+  if (costPerKm !== null && (isNaN(costPerKm) || costPerKm < 0)) {
+    return res.status(400).json({ message: 'costPerKm must be a non-negative number' });
+  }
 
   // Time format validation
   const timeRegex = /^([0-1][0-9]|2[0-3]):[0-5][0-9]$/;
@@ -218,8 +252,10 @@ router.put('/vehicles/:vehicleId', dispatcherRoles, asyncHandler(async (req, res
         MaxVolumeCbm = @maxVolumeCbm,
         WorkingStart = @workingStart,
         WorkingEnd = @workingEnd,
-        IsActive = @isActive
-    OUTPUT inserted.VehicleId, inserted.LicensePlate, inserted.VehicleType, inserted.MaxWeightKg, inserted.MaxVolumeCbm, inserted.WorkingStart, inserted.WorkingEnd, inserted.IsActive
+        IsActive = @isActive,
+        BranchId = @branchId,
+        CostPerKm = @costPerKm
+    OUTPUT inserted.VehicleId, inserted.LicensePlate, inserted.VehicleType, inserted.MaxWeightKg, inserted.MaxVolumeCbm, inserted.WorkingStart, inserted.WorkingEnd, inserted.IsActive, inserted.BranchId, inserted.CostPerKm
     WHERE VehicleId = @vehicleId
   `, {
     inputs: {
@@ -231,6 +267,8 @@ router.put('/vehicles/:vehicleId', dispatcherRoles, asyncHandler(async (req, res
       workingStart: { type: sql.VarChar(5), value: workingStart },
       workingEnd: { type: sql.VarChar(5), value: workingEnd },
       isActive: { type: sql.Bit, value: isActive },
+      branchId: { type: sql.Int, value: branchId },
+      costPerKm: { type: sql.Decimal(18, 2), value: costPerKm },
     },
   });
 
@@ -375,9 +413,23 @@ router.put('/drivers/:driverId', dispatcherRoles, asyncHandler(async (req, res) 
 
 // 3. Get pending Delivery Orders (DeliveryType = 'delivery', Status = 'draft', not assigned to any load plan)
 router.get('/pending-dos', dispatcherRoles, asyncHandler(async (req, res) => {
+  const branchId = req.query.branchId ? parseInt(req.query.branchId, 10) : null;
+  const inputs = {};
+  let whereClause = `
+    WHERE do.DeliveryType = 'delivery' AND do.Status = 'draft'
+      AND NOT EXISTS (
+        SELECT 1 FROM dbo.WmsLoadPlanLines lpl WHERE lpl.DeliveryOrderId = do.DeliveryOrderId
+      )
+  `;
+
+  if (branchId) {
+    whereClause += ' AND do.BranchId = @branchId';
+    inputs.branchId = { type: sql.Int, value: branchId };
+  }
+
   const rows = await mssqlQuery('DEFAULT', `
     SELECT
-      do.DeliveryOrderId, do.DocumentNo, do.CustomerId, c.CustomerName, c.CustomerCode,
+      do.DeliveryOrderId, do.DocumentNo, do.BranchId, do.CustomerId, c.CustomerName, c.CustomerCode,
       do.DocumentDate, do.ShipToAddress,
       ISNULL(SUM(
         COALESCE(
@@ -400,19 +452,17 @@ router.get('/pending-dos', dispatcherRoles, asyncHandler(async (req, res) => {
     JOIN dbo.ItemLengths il ON i.LengthId = il.LengthId
     JOIN dbo.ItemWidths iw ON i.WidthId = iw.WidthId
     LEFT JOIN dbo.ItemThicknesses th ON th.ThicknessId = i.ThicknessId
-    WHERE do.DeliveryType = 'delivery' AND do.Status = 'draft'
-      AND NOT EXISTS (
-        SELECT 1 FROM dbo.WmsLoadPlanLines lpl WHERE lpl.DeliveryOrderId = do.DeliveryOrderId
-      )
-    GROUP BY do.DeliveryOrderId, do.DocumentNo, do.CustomerId, c.CustomerName, c.CustomerCode, do.DocumentDate, do.ShipToAddress
+    ${whereClause}
+    GROUP BY do.DeliveryOrderId, do.DocumentNo, do.BranchId, do.CustomerId, c.CustomerName, c.CustomerCode, do.DocumentDate, do.ShipToAddress
     ORDER BY do.DeliveryOrderId DESC
-  `);
+  `, { inputs });
 
   res.json({
     data: rows.map(r => ({
       id: r.DeliveryOrderId,
       deliveryOrderId: r.DeliveryOrderId,
       documentNo: r.DocumentNo,
+      branchId: r.BranchId,
       customerId: r.CustomerId,
       customerCode: r.CustomerCode,
       customerName: r.CustomerName,
@@ -423,6 +473,316 @@ router.get('/pending-dos', dispatcherRoles, asyncHandler(async (req, res) => {
       totalLines: r.TotalLines,
       totalQty: Number(r.TotalQty),
     }))
+  });
+}));
+
+function convertTimeToMinutes(timeVal) {
+  if (!timeVal) return 0;
+  let timeStr = '';
+  if (timeVal instanceof Date) {
+    timeStr = timeVal.toISOString().substring(11, 16); // "HH:mm"
+  } else {
+    timeStr = String(timeVal).substring(0, 5); // "HH:mm"
+  }
+  const parts = timeStr.split(':');
+  if (parts.length >= 2) {
+    const hours = parseInt(parts[0], 10);
+    const minutes = parseInt(parts[1], 10);
+    if (!isNaN(hours) && !isNaN(minutes)) {
+      return hours * 60 + minutes;
+    }
+  }
+  return 0;
+}
+
+// GET /bot-payload
+router.get('/bot-payload', dispatcherRoles, asyncHandler(async (req, res) => {
+  const date = req.query.date; // e.g. "2026-06-13"
+  const branchId = req.query.branch ? parseInt(req.query.branch, 10) : null;
+
+  if (!date || !branchId) {
+    return res.status(400).json({ message: "Parameters 'date' and 'branch' are required." });
+  }
+
+  // 1. Get Google Maps Geocoding API Key
+  const keyRes = await mssqlQuery('DEFAULT', `
+    SELECT SettingValue FROM dbo.SystemSettings WHERE SettingKey = 'GOOGLE_MAPS_KEY'
+  `);
+  const googleMapsKey = keyRes.length > 0 ? keyRes[0].SettingValue : null;
+
+  // 2. Get Depot coordinates from Branches
+  const branchRes = await mssqlQuery('DEFAULT', `
+    SELECT Latitude, Longitude, BranchName FROM dbo.Branches WHERE BranchId = @branchId
+  `, { inputs: { branchId: { type: sql.Int, value: branchId } } });
+
+  if (!branchRes.length) {
+    return res.status(404).json({ message: `Branch ID ${branchId} not found` });
+  }
+
+  const depot = {
+    lat: branchRes[0].Latitude ? Number(branchRes[0].Latitude) : null,
+    lng: branchRes[0].Longitude ? Number(branchRes[0].Longitude) : null,
+    branchName: branchRes[0].BranchName
+  };
+
+  if (depot.lat === null || depot.lng === null) {
+    return res.status(400).json({ 
+      message: `สาขา "${depot.branchName}" ยังไม่ได้ระบุพิกัด Latitude หรือ Longitude ในระบบ กรุณาไปที่หน้าตั้งค่าบริษัทเพื่อระบุพิกัดก่อนเรียกใช้งาน AI` 
+    });
+  }
+
+  // 3. Get Vehicles matching branch (or unassigned/global ones)
+  const vehiclesRes = await mssqlQuery('DEFAULT', `
+    SELECT v.VehicleId, v.LicensePlate, v.VehicleType, v.MaxWeightKg, v.MaxVolumeCbm, v.WorkingStart, v.WorkingEnd, v.CostPerKm
+    FROM dbo.Vehicles v
+    WHERE v.IsActive = 1
+      AND (v.BranchId = @branchId OR v.BranchId IS NULL)
+  `, { inputs: { branchId: { type: sql.Int, value: branchId } } });
+
+  const vehicles = vehiclesRes.map(v => ({
+    id: String(v.VehicleId),
+    weight_capacity: Number(v.MaxWeightKg) || 0,
+    volume_capacity: Number(v.MaxVolumeCbm) || 0,
+    start_time_min: convertTimeToMinutes(v.WorkingStart),
+    end_time_min: convertTimeToMinutes(v.WorkingEnd),
+    cost_per_km: v.CostPerKm !== null && v.CostPerKm !== undefined ? Number(v.CostPerKm) : 1.0
+  }));
+
+  // 4. Get Pending draft DOs
+  const pendingDosRes = await mssqlQuery('DEFAULT', `
+    SELECT
+      do.DeliveryOrderId,
+      do.DocumentNo,
+      do.CustomerId,
+      c.CustomerName,
+      c.CustomerCode,
+      do.DocumentDate,
+      do.ShipToAddress,
+      so.ShippingAddress,
+      so.ShippingLatLng,
+      so.DeliveryReservationId,
+      dr.DeliveryStartDateTime,
+      DATEPART(hour, dr.DeliveryStartDateTime) AS StartHour,
+      DATEPART(minute, dr.DeliveryStartDateTime) AS StartMinute,
+      ISNULL(SUM(
+        COALESCE(
+          NULLIF(iw.WidthM * il.LengthM * (th.ThicknessMm / 1000.0) * 770.0, 0),
+          1.5
+        ) * dol.Quantity
+      ), 0) AS TotalWeightKg,
+      ISNULL(SUM(
+        COALESCE(
+          NULLIF(iw.WidthM * il.LengthM * (th.ThicknessMm / 1000.0), 0),
+          0.002
+        ) * dol.Quantity
+      ), 0) AS TotalVolumeCbm
+    FROM dbo.DeliveryOrders do
+    JOIN dbo.Customers c ON c.CustomerId = do.CustomerId
+    JOIN dbo.DeliveryOrderLines dol ON dol.DeliveryOrderId = do.DeliveryOrderId
+    JOIN dbo.Items i ON i.ItemId = dol.ItemId
+    JOIN dbo.ItemLengths il ON i.LengthId = il.LengthId
+    JOIN dbo.ItemWidths iw ON i.WidthId = iw.WidthId
+    LEFT JOIN dbo.ItemThicknesses th ON th.ThicknessId = i.ThicknessId
+    LEFT JOIN dbo.SalesOrders so ON so.SalesOrderId = do.SalesOrderId
+    LEFT JOIN dbo.DeliveryReservations dr ON dr.ReservationId = so.DeliveryReservationId
+    WHERE do.DeliveryType = 'delivery'
+      AND do.Status = 'draft'
+      AND do.BranchId = @branchId
+      AND NOT EXISTS (
+        SELECT 1 FROM dbo.WmsLoadPlanLines lpl WHERE lpl.DeliveryOrderId = do.DeliveryOrderId
+      )
+      AND (
+        so.DeliveryReservationId IS NULL
+        OR CONVERT(date, dr.DeliveryStartDateTime) = @date
+      )
+    GROUP BY 
+      do.DeliveryOrderId, 
+      do.DocumentNo, 
+      do.CustomerId, 
+      c.CustomerName, 
+      c.CustomerCode, 
+      do.DocumentDate, 
+      do.ShipToAddress,
+      so.ShippingAddress,
+      so.ShippingLatLng, 
+      so.DeliveryReservationId, 
+      dr.DeliveryStartDateTime
+    ORDER BY do.DeliveryOrderId DESC
+  `, {
+    inputs: {
+      branchId: { type: sql.Int, value: branchId },
+      date: { type: sql.VarChar, value: date }
+    }
+  });
+
+  const orders = await Promise.all(pendingDosRes.map(async (r) => {
+    let lat = null;
+    let lng = null;
+
+    // Try to parse coordinate from ShippingLatLng
+    if (r.ShippingLatLng) {
+      const parts = r.ShippingLatLng.split(',');
+      if (parts.length === 2) {
+        lat = parseFloat(parts[0].trim());
+        lng = parseFloat(parts[1].trim());
+        if (isNaN(lat)) lat = null;
+        if (isNaN(lng)) lng = null;
+      }
+    }
+
+    // Determine time windows
+    let startMin = 0;
+    let endMin = 1440;
+
+    if (r.DeliveryReservationId !== null && r.StartHour !== null) {
+      startMin = r.StartHour * 60 + (r.StartMinute || 0);
+      endMin = startMin + 60;
+    }
+
+    const address = r.ShipToAddress || r.ShippingAddress || '';
+
+    // Geocoding Fallback
+    if ((lat === null || lng === null) && googleMapsKey && address) {
+      try {
+        const geocodeUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${googleMapsKey}`;
+        const response = await fetch(geocodeUrl);
+        const data = await response.json();
+        if (data.status === 'OK' && data.results && data.results.length > 0) {
+          const location = data.results[0].geometry.location;
+          lat = location.lat;
+          lng = location.lng;
+        } else {
+          console.warn(`Geocoding status: ${data.status} for address: "${address}"`);
+        }
+      } catch (err) {
+        console.error(`Geocoding error for address: "${address}"`, err);
+      }
+    }
+
+    return {
+      id: r.DocumentNo,
+      deliveryOrderId: r.DeliveryOrderId,
+      lat: lat,
+      lng: lng,
+      weight: Number(r.TotalWeightKg),
+      volume: Number(r.TotalVolumeCbm),
+      priority: 1,
+      time_window_start_min: startMin,
+      time_window_end_min: endMin,
+      service_time_min: 30,
+      shippingAddress: address
+    };
+  }));
+
+  const missingCoordsOrders = orders.filter(o => o.lat === null || o.lng === null).map(o => o.id);
+  if (missingCoordsOrders.length > 0) {
+    return res.status(400).json({
+      message: `ใบส่งของ (DO) ต่อไปนี้ไม่มีข้อมูลพิกัดจัดส่ง และระบบค้นหาอัตโนมัติไม่สำเร็จ: ${missingCoordsOrders.join(', ')} กรุณาระบุพิกัดที่ถูกต้องในหน้าใบสั่งซื้อ หรือตรวจเช็คคีย์ Google Maps API ในระบบก่อนประมวลผลด้วย AI`
+    });
+  }
+
+  const optimizerPayload = {
+    depot: {
+      lat: depot.lat,
+      lng: depot.lng,
+      branchName: depot.branchName
+    },
+    vehicles: vehicles.map(v => ({
+      id: v.id,
+      weight_capacity: v.weight_capacity,
+      volume_capacity: v.volume_capacity,
+      start_time_min: v.start_time_min,
+      end_time_min: v.end_time_min,
+      cost_per_km: v.cost_per_km
+    })),
+    orders: orders.map(o => ({
+      id: o.id,
+      deliveryOrderId: o.deliveryOrderId,
+      lat: o.lat,
+      lng: o.lng,
+      weight: o.weight,
+      volume: o.volume,
+      priority: o.priority,
+      time_window_start_min: o.time_window_start_min,
+      time_window_end_min: o.time_window_end_min,
+      service_time_min: o.service_time_min,
+      shippingAddress: o.shippingAddress
+    }))
+  };
+
+  // POST to microservice optimizer
+  let optResult;
+  const optimizerUrl = process.env.OPTIMIZER_URL || 'http://localhost:8080/optimize';
+  try {
+    const optResponse = await fetch(optimizerUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'accept': 'application/json'
+      },
+      body: JSON.stringify(optimizerPayload)
+    });
+
+    if (!optResponse.ok) {
+      const errText = await optResponse.text();
+      throw new Error(`Optimizer returned status ${optResponse.status}: ${errText}`);
+    }
+    optResult = await optResponse.json();
+  } catch (err) {
+    console.error('Optimizer service call failed:', err);
+    return res.status(502).json({ 
+      message: `ไม่สามารถเชื่อมต่อระบบประมวลผลจัดเส้นทาง (${optimizerUrl}) ได้: ${err.message}` 
+    });
+  }
+
+  // Create a map for DOs by DocumentNo for O(1) lookups
+  const doMap = {};
+  pendingDosRes.forEach(r => {
+    doMap[r.DocumentNo] = r;
+  });
+
+  // Enrich routes stops
+  const enrichedRoutes = (optResult.routes || []).map(route => {
+    const vInfo = vehiclesRes.find(v => String(v.VehicleId) === String(route.vehicle_id));
+    const augmentedStops = (route.route || []).map((stop, stopIdx) => {
+      if (stop.order_id === 'depot') {
+        return {
+          ...stop,
+          stopSequence: stopIdx + 1,
+          customerName: depot.branchName || 'คลังสินค้า',
+          shippingAddress: branchRes[0].BranchName || depot.branchName || 'คลังสินค้า',
+          lat: depot.lat,
+          lng: depot.lng
+        };
+      } else {
+        const doData = doMap[stop.order_id];
+        return {
+          ...stop,
+          stopSequence: stopIdx + 1,
+          deliveryOrderId: doData ? doData.DeliveryOrderId : null,
+          customerName: doData ? doData.CustomerName : 'ไม่ทราบชื่อ',
+          shippingAddress: doData ? doData.ShipToAddress : '',
+          lat: stop.lat || (doData ? doData.lat : null),
+          lng: stop.lng || (doData ? doData.lng : null)
+        };
+      }
+    });
+    return {
+      ...route,
+      licensePlate: vInfo ? vInfo.LicensePlate : '',
+      vehicleType: vInfo ? vInfo.VehicleType : '',
+      route: augmentedStops
+    };
+  });
+
+  res.json({
+    status: optResult.status,
+    total_distance_meters: optResult.total_distance_meters,
+    total_weight: optResult.total_weight,
+    total_volume: optResult.total_volume,
+    total_cost: optResult.total_cost,
+    routes: enrichedRoutes,
+    unassigned_orders: optResult.unassigned_orders || []
   });
 }));
 
@@ -454,11 +814,10 @@ async function generateLoadPlanNo(tx) {
 // 4. Create a Load Plan
 router.post('/', dispatcherRoles, asyncHandler(async (req, res) => {
   const userId = getUserId(req);
-  const { planDate, vehicleId, driverId, remarks, deliveryOrderIds } = req.body;
+  const { planDate, vehicleId, driverId, remarks, deliveryOrderIds, deliveryOrders, branchId } = req.body;
 
   if (!planDate) return res.status(400).json({ message: 'planDate is required' });
   if (!vehicleId) return res.status(400).json({ message: 'vehicleId is required' });
-  if (!driverId) return res.status(400).json({ message: 'driverId is required' });
   if (!Array.isArray(deliveryOrderIds) || deliveryOrderIds.length === 0) {
     return res.status(400).json({ message: 'At least one deliveryOrderId is required' });
   }
@@ -510,28 +869,73 @@ router.post('/', dispatcherRoles, asyncHandler(async (req, res) => {
     headerReq.input('volume', sql.Decimal(18, 4), totalVolume);
     headerReq.input('remarks', sql.NVarChar(1000), remarks || null);
     headerReq.input('createdBy', sql.Int, userId);
+    headerReq.input('branchId', sql.Int, branchId || null);
 
     const insertHeaderRes = await headerReq.query(`
-      INSERT INTO dbo.WmsLoadPlans (LoadPlanNo, PlanDate, VehicleId, DriverId, Status, TotalWeightKg, TotalVolumeCbm, Remarks, CreatedBy)
+      INSERT INTO dbo.WmsLoadPlans (LoadPlanNo, PlanDate, VehicleId, DriverId, Status, TotalWeightKg, TotalVolumeCbm, Remarks, CreatedBy, BranchId)
       OUTPUT INSERTED.LoadPlanId
-      VALUES (@lpNo, @planDate, @vId, @dId, 'draft', @weight, @volume, @remarks, @createdBy)
+      VALUES (@lpNo, @planDate, @vId, @dId, 'draft', @weight, @volume, @remarks, @createdBy, @branchId)
     `);
     const loadPlanId = insertHeaderRes.recordset[0].LoadPlanId;
 
-    // Insert lines with sequences
+    // Insert lines with sequences and coordinates
     for (let idx = 0; idx < deliveryOrderIds.length; idx++) {
       const doId = deliveryOrderIds[idx];
+      
+      const extraInfo = Array.isArray(deliveryOrders) ? deliveryOrders.find(item => item.deliveryOrderId === doId) : null;
+      let lat = extraInfo ? extraInfo.lat : null;
+      let lng = extraInfo ? extraInfo.lng : null;
+
+      // Fallback: Query ShippingLatLng from SalesOrder associated with DO
+      if (lat === null || lng === null) {
+        const soReq = new sql.Request(tx);
+        soReq.input('doId', sql.Int, doId);
+        const soRes = await soReq.query(`
+          SELECT so.ShippingLatLng 
+          FROM dbo.SalesOrders so
+          JOIN dbo.DeliveryOrders do ON do.SalesOrderId = so.SalesOrderId
+          WHERE do.DeliveryOrderId = @doId
+        `);
+        if (soRes.recordset.length > 0 && soRes.recordset[0].ShippingLatLng) {
+          const parts = soRes.recordset[0].ShippingLatLng.split(',');
+          if (parts.length === 2) {
+            lat = parseFloat(parts[0].trim());
+            lng = parseFloat(parts[1].trim());
+            if (isNaN(lat)) lat = null;
+            if (isNaN(lng)) lng = null;
+          }
+        }
+      }
+
       const lineReq = new sql.Request(tx);
       lineReq.input('lpId', sql.Int, loadPlanId);
       lineReq.input('doId', sql.Int, doId);
       lineReq.input('seq', sql.Int, idx + 1);
+      lineReq.input('lat', sql.Decimal(18, 10), lat);
+      lineReq.input('lng', sql.Decimal(18, 10), lng);
+
       await lineReq.query(`
-        INSERT INTO dbo.WmsLoadPlanLines (LoadPlanId, DeliveryOrderId, StopSequence, DeliveryStatus)
-        VALUES (@lpId, @doId, @seq, 'pending')
+        INSERT INTO dbo.WmsLoadPlanLines (LoadPlanId, DeliveryOrderId, StopSequence, DeliveryStatus, Latitude, Longitude)
+        VALUES (@lpId, @doId, @seq, 'pending', @lat, @lng)
       `);
     }
 
     return { loadPlanId, loadPlanNo };
+  });
+
+  await logRequestAudit(req, {
+    module: 'Transportation',
+    actionType: 'Create',
+    targetId: result.loadPlanNo,
+    description: `Created Load Plan ${result.loadPlanNo}`,
+    newValues: {
+      planDate,
+      vehicleId,
+      driverId,
+      remarks,
+      deliveryOrderIds,
+      branchId
+    }
   });
 
   res.status(201).json({ data: result });
@@ -541,13 +945,14 @@ router.post('/', dispatcherRoles, asyncHandler(async (req, res) => {
 router.get('/', dispatcherRoles, asyncHandler(async (req, res) => {
   const rows = await mssqlQuery('DEFAULT', `
     SELECT
-      lp.LoadPlanId, lp.LoadPlanNo, lp.PlanDate, lp.Status,
+      lp.LoadPlanId, lp.LoadPlanNo, lp.PlanDate, lp.Status, lp.BranchId, b.BranchName,
       lp.TotalWeightKg, lp.TotalVolumeCbm, lp.Remarks, lp.CreatedAt,
       v.LicensePlate, v.VehicleType, d.DriverName, u.DisplayName AS CreatedByName
     FROM dbo.WmsLoadPlans lp
     JOIN dbo.Vehicles v ON v.VehicleId = lp.VehicleId
     JOIN dbo.Drivers d ON d.DriverId = lp.DriverId
     JOIN dbo.Users u ON u.UserId = lp.CreatedBy
+    LEFT JOIN dbo.Branches b ON b.BranchId = lp.BranchId
     ORDER BY lp.PlanDate DESC, lp.LoadPlanId DESC
   `);
 
@@ -558,6 +963,8 @@ router.get('/', dispatcherRoles, asyncHandler(async (req, res) => {
       loadPlanNo: r.LoadPlanNo,
       planDate: r.PlanDate,
       status: r.Status,
+      branchId: r.BranchId,
+      branchName: r.BranchName,
       totalWeightKg: Number(r.TotalWeightKg),
       totalVolumeCbm: Number(r.TotalVolumeCbm),
       remarks: r.Remarks,
@@ -576,7 +983,7 @@ router.get('/:id', dispatcherRoles, asyncHandler(async (req, res) => {
   
   const headerRows = await mssqlQuery('DEFAULT', `
     SELECT
-      lp.LoadPlanId, lp.LoadPlanNo, lp.PlanDate, lp.Status,
+      lp.LoadPlanId, lp.LoadPlanNo, lp.PlanDate, lp.Status, lp.BranchId, b.BranchName,
       lp.TotalWeightKg, lp.TotalVolumeCbm, lp.Remarks, lp.CreatedAt,
       v.VehicleId, v.LicensePlate, v.VehicleType, v.MaxWeightKg, v.MaxVolumeCbm, v.WorkingStart, v.WorkingEnd,
       d.DriverId, d.DriverName, d.Phone, u.DisplayName AS CreatedByName
@@ -584,16 +991,17 @@ router.get('/:id', dispatcherRoles, asyncHandler(async (req, res) => {
     JOIN dbo.Vehicles v ON v.VehicleId = lp.VehicleId
     JOIN dbo.Drivers d ON d.DriverId = lp.DriverId
     JOIN dbo.Users u ON u.UserId = lp.CreatedBy
+    LEFT JOIN dbo.Branches b ON b.BranchId = lp.BranchId
     WHERE lp.LoadPlanId = @lpId
   `, { inputs: { lpId: { type: sql.Int, value: lpId } } });
 
   if (headerRows.length === 0) {
-    return res.status(404).json({ message: 'Load plan not found' });
+    return res.status(404).json({ message: 'load plan not found' });
   }
 
   const linesRows = await mssqlQuery('DEFAULT', `
     SELECT
-      lpl.LoadPlanLineId, lpl.StopSequence, lpl.DeliveryStatus,
+      lpl.LoadPlanLineId, lpl.StopSequence, lpl.DeliveryStatus, lpl.Latitude, lpl.Longitude,
       do.DeliveryOrderId, do.DocumentNo, do.ShipToAddress, do.DocumentDate,
       c.CustomerName, c.CustomerCode,
       ISNULL(SUM(COALESCE(NULLIF(i.WidthM * i.LengthM * (th.ThicknessMm / 1000.0) * 1350.0, 0), 1.5) * dol.Quantity), 0) AS LineWeight,
@@ -605,7 +1013,7 @@ router.get('/:id', dispatcherRoles, asyncHandler(async (req, res) => {
     JOIN dbo.Items i ON i.ItemId = dol.ItemId
     LEFT JOIN dbo.ItemThicknesses th ON th.ThicknessId = i.ThicknessId
     WHERE lpl.LoadPlanId = @lpId
-    GROUP BY lpl.LoadPlanLineId, lpl.StopSequence, lpl.DeliveryStatus, do.DeliveryOrderId, do.DocumentNo, do.ShipToAddress, do.DocumentDate, c.CustomerName, c.CustomerCode
+    GROUP BY lpl.LoadPlanLineId, lpl.StopSequence, lpl.DeliveryStatus, lpl.Latitude, lpl.Longitude, do.DeliveryOrderId, do.DocumentNo, do.ShipToAddress, do.DocumentDate, c.CustomerName, c.CustomerCode
     ORDER BY lpl.StopSequence ASC
   `, { inputs: { lpId: { type: sql.Int, value: lpId } } });
 
@@ -616,6 +1024,8 @@ router.get('/:id', dispatcherRoles, asyncHandler(async (req, res) => {
       loadPlanNo: headerRows[0].LoadPlanNo,
       planDate: headerRows[0].PlanDate,
       status: headerRows[0].Status,
+      branchId: headerRows[0].BranchId,
+      branchName: headerRows[0].BranchName,
       totalWeightKg: Number(headerRows[0].TotalWeightKg),
       totalVolumeCbm: Number(headerRows[0].TotalVolumeCbm),
       remarks: headerRows[0].Remarks,
@@ -648,6 +1058,8 @@ router.get('/:id', dispatcherRoles, asyncHandler(async (req, res) => {
         customerCode: l.CustomerCode,
         weightKg: Number(l.LineWeight),
         volumeCbm: Number(l.LineVolume),
+        latitude: l.Latitude ? Number(l.Latitude) : null,
+        longitude: l.Longitude ? Number(l.Longitude) : null,
       }))
     }
   });

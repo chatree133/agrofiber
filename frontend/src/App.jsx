@@ -16,7 +16,7 @@ import Warehouses from './pages/master/Warehouses.jsx';
 import CompanyList from './pages/settings/CompanyList.jsx';
 import CompanyForm from './pages/settings/CompanyForm.jsx';
 import Numbering from './pages/settings/Numbering.jsx';
-import SmtpSettings from './pages/settings/SmtpSettings.jsx';
+import SystemSettings from './pages/settings/SystemSettings.jsx';
 import PricingPolicies from './pages/master/PricingPolicies.jsx';
 import PricingPolicyHistory from './pages/master/PricingPolicyHistory.jsx';
 import Customers from './pages/master/Customers.jsx';
@@ -29,6 +29,7 @@ import StockList from './pages/inventory/StockList.jsx';
 import InventoryReports from './pages/inventory/InventoryReports.jsx';
 import DocumentPrint from './pages/document/DocumentPrint.jsx';
 import ApprovalsDashboard from './pages/audit/ApprovalsDashboard.jsx';
+import AuditLogs from './pages/audit/AuditLogs.jsx';
 import Receiving from './pages/wms/Receiving.jsx';
 import PickingList from './pages/wms/PickingList.jsx';
 import WavePickingDetail from './pages/wms/WavePickingDetail.jsx';
@@ -38,6 +39,7 @@ import WmsDashboard from './pages/wms/WmsDashboard.jsx';
 import IncidentList from './pages/wms/IncidentList.jsx';
 import LoadPlanList from './pages/wms/LoadPlanList.jsx';
 import LoadPlanCreate from './pages/wms/LoadPlanCreate.jsx';
+import LoadPlanBot from './pages/wms/LoadPlanBot.jsx';
 import DriverPortal from './pages/wms/DriverPortal.jsx';
 import TransportMaster from './pages/wms/TransportMaster.jsx';
 import DeliveryOrderList from './pages/deliveryorder/DeliveryOrderList.jsx';
@@ -114,6 +116,7 @@ function AppRoutes() {
         
         <Route path="document/print" element={<DocumentPrint />} />
         <Route path="audit/approvals" element={<ApprovalsDashboard />} />
+        <Route path="audit/logs" element={<AuditLogs />} />
         
         {/* WMS Routes */}
         <Route path="wms/dashboard" element={<WmsDashboard />} />
@@ -135,7 +138,7 @@ function AppRoutes() {
         <Route path="settings/company/create" element={<CompanyForm />} />
         <Route path="settings/company/:id/edit" element={<CompanyForm />} />
         <Route path="settings/numbering" element={<Numbering />} />
-        <Route path="settings/smtp" element={<SmtpSettings />} />
+        <Route path="settings/system" element={<SystemSettings />} />
         <Route path="*" element={<GenericPage />} />
       </Route>
       <Route
@@ -151,6 +154,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <DeliveryScheduler />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/wms/load-plans/bot"
+        element={
+          <ProtectedRoute>
+            <LoadPlanBot />
           </ProtectedRoute>
         }
       />

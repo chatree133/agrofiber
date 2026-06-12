@@ -92,6 +92,7 @@ export default function SalesOrderCreate() {
   const [addressesList, setAddressesList] = useState([]);
   const [customAddressEnabled, setCustomAddressEnabled] = useState(false);
   const [selectedDeliverySlot, setSelectedDeliverySlot] = useState(null);
+  const [shippingLatLng, setShippingLatLng] = useState(null);
 
   // Salesperson autocomplete
   const [salespersonSearch, setSalespersonSearch] = useState('');
@@ -226,6 +227,8 @@ export default function SalesOrderCreate() {
           documentDate: viewId ? dayjs(soData.DocumentDate || soData.documentDate) : dayjs(),
           deliverySlotDisplay: slotDisplayVal
         };
+
+        setShippingLatLng(soData.ShippingLatLng || soData.shippingLatLng || null);
 
         if (soData.ShippingAddress || soData.shippingAddress) {
           setCustomAddressEnabled(true);
@@ -456,13 +459,16 @@ export default function SalesOrderCreate() {
           deliveryAddressText: formatAddress(defaultAddr)
         });
         setCustomAddressEnabled(false);
+        setShippingLatLng(defaultAddr.latitude && defaultAddr.longitude ? `${defaultAddr.latitude},${defaultAddr.longitude}` : null);
       } else {
         form.setFieldsValue({ deliveryLocation: 'other', deliveryAddressText: '' });
         setCustomAddressEnabled(true);
+        setShippingLatLng(null);
       }
     } catch (err) {
       console.error('Error loading customer addresses', err);
       setAddressesList([]);
+      setShippingLatLng(null);
     }
 
     // Auto-update price for existing items if Customer changed
@@ -477,23 +483,33 @@ export default function SalesOrderCreate() {
     if (value === 'other') {
       setCustomAddressEnabled(true);
       form.setFieldsValue({ deliveryAddressText: '' });
+      setShippingLatLng(null);
     } else {
       setCustomAddressEnabled(false);
       const addr = addressesList.find(a => a.id === value);
       if (addr) {
         form.setFieldsValue({ deliveryAddressText: formatAddress(addr) });
+        setShippingLatLng(addr.latitude && addr.longitude ? `${addr.latitude},${addr.longitude}` : null);
+      } else {
+        setShippingLatLng(null);
       }
     }
   };
 
   const openDeliveryScheduler = () => {
+    const branchId = form.getFieldValue('branchId');
+    if (!branchId) {
+      message.error('กรุณาเลือกสาขาก่อนจองวันและเวลาจัดส่ง');
+      return;
+    }
+
     const width = 1050;
     const height = 750;
     const left = window.screenX + (window.outerWidth - width) / 2;
     const top = window.screenY + (window.outerHeight - height) / 2;
     
     const resId = selectedDeliverySlot?.reservationId || '';
-    const url = `/salesorder/delivery-scheduler?currentReservationId=${resId}`;
+    const url = `/salesorder/delivery-scheduler?currentReservationId=${resId}&branch=${branchId}`;
     
     window.onSelectDeliverySlot = (slotData) => {
       setSelectedDeliverySlot(slotData);
@@ -1092,6 +1108,7 @@ export default function SalesOrderCreate() {
         status: statusVal,
         lines: payloadLines,
         shippingAddress: formValues.deliveryAddressText || '',
+        shippingLatLng: shippingLatLng || null,
         deliveryType: formValues.deliveryType || 'delivery',
         deliveryReservationId: selectedDeliverySlot?.reservationId || null
       };
@@ -1258,6 +1275,7 @@ export default function SalesOrderCreate() {
               { key: 1, lineNum: 1, itemId: null, itemSpecId: null, sku: '', name: '', productType: '', remark: '', thickness: '', width: '', length: '', qty: 0, pallet: '0.00', unitId: null, unitCode: '', unitPrice: 0, discountPercent: 0, discountAmount: 0, taxRatePercent: 7, lineTotal: 0 }
             ]);
             setSelectedCustomer(null);
+            setShippingLatLng(null);
           }}>
             ล้างค่า
           </Button>
@@ -2036,6 +2054,7 @@ export default function SalesOrderCreate() {
               { key: 1, lineNum: 1, itemId: null, itemSpecId: null, sku: '', name: '', productType: '', remark: '', thickness: '', width: '', length: '', qty: 0, pallet: '0.00', unitId: null, unitCode: '', unitPrice: 0, discountPercent: 0, discountAmount: 0, taxRatePercent: 7, lineTotal: 0 }
             ]);
             setSelectedCustomer(null);
+            setShippingLatLng(null);
           }}>
             ล้างค่า
           </Button>

@@ -66,6 +66,17 @@ export function CompanyProvider({ children }) {
     return data.data;
   };
 
+  const getSystemSettings = async (group) => {
+    const params = group ? { group } : {};
+    const data = await ApiClient.get('/api/companies/system-settings', { headers: authHeaders, params });
+    return data.data;
+  };
+
+  const updateSystemSettings = async (settings) => {
+    const data = await ApiClient.put('/api/companies/system-settings', { settings }, { headers: authHeaders });
+    return data.data;
+  };
+
   const value = useMemo(() => ({
     getCompanies,
     getCompany,
@@ -78,7 +89,9 @@ export function CompanyProvider({ children }) {
     getDocumentSeries,
     updateDocumentSeries,
     getSmtpSettings,
-    updateSmtpSettings
+    updateSmtpSettings,
+    getSystemSettings,
+    updateSystemSettings
   }), [authHeaders]);
 
   return (

@@ -143,9 +143,19 @@ export function WmsProvider({ children }) {
     return res.data;
   };
 
-  const getPendingDeliveryOrders = async () => {
-    const res = await ApiClient.get('/api/wms/load-plans/pending-dos', { headers: authHeaders });
+  const getPendingDeliveryOrders = async (branchId) => {
+    const params = branchId ? { branchId } : {};
+    const res = await ApiClient.get('/api/wms/load-plans/pending-dos', { headers: authHeaders, params });
     return res.data || [];
+  };
+
+  const getLoadPlanBotPayload = async (date, branch) => {
+    const res = await ApiClient.get(
+      '/api/wms/load-plans/bot-payload',
+      { date, branch },
+      { timeout: 120000, headers: authHeaders }
+    );
+    return res;
   };
 
   const createLoadPlan = async (payload) => {
@@ -197,6 +207,7 @@ export function WmsProvider({ children }) {
     createLoadPlanDriver,
     updateLoadPlanDriver,
     getPendingDeliveryOrders,
+    getLoadPlanBotPayload,
     createLoadPlan,
     getTodayDriverLoadPlans,
     submitLoadPlanPod

@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import bwipjs from 'bwip-js';
 import { mssqlQuery, sql } from '../lib/mssql.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
+import { logAuditEvent } from '../lib/auditLogger.js';
 
 const router = Router();
 
@@ -71,6 +72,16 @@ router.post(
     const token = jwt.sign(payload, process.env.JWT_SECRET || 'dev-secret', {
       expiresIn: process.env.JWT_EXPIRES_IN || '8h',
     });
+
+    await logAuditEvent({
+      userId: user.id,
+      username: user.username,
+      module: 'Auth',
+      actionType: 'Login',
+      description: `User '${user.username}' logged in successfully`,
+      ipAddress: req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || null
+    });
+    req.auditLogged = true;
 
     res.json({ token, user });
   }),

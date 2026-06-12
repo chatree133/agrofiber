@@ -30,6 +30,8 @@ import customerPaymentRoutes from './routes/customerPayment.js';
 import qcRoutes from './routes/qc.js';
 import companyRoutes from './routes/company.js';
 import loadPlanRoutes from './routes/loadPlans.js';
+import auditRoutes from './routes/audit.js';
+import { auditMiddleware } from './lib/auditLogger.js';
 
 const app = express();
 const port = process.env.PORT || 4000;
@@ -37,6 +39,7 @@ const port = process.env.PORT || 4000;
 app.use(helmet());
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '3mb' }));
+app.use(auditMiddleware);
 app.use(morgan('dev'));
 app.use('/uploads', express.static(path.resolve('uploads')));
 app.use('/public', express.static(path.resolve('src/public')));
@@ -71,6 +74,7 @@ app.use('/api/companies', companyRoutes);
 app.use('/api/wms', wmsRoutes);
 app.use('/api/wms/load-plans', loadPlanRoutes);
 app.use('/api/master-data', masterRoutes);
+app.use('/api/audit-logs', auditRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ message: `Route not found: ${req.method} ${req.originalUrl}` });
