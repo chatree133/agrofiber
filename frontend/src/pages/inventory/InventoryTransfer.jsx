@@ -410,7 +410,7 @@ export default function InventoryTransfer() {
     };
 
     return (
-        <Card>
+        <div>
             <div
                 className="flex justify-between items-center mb-6"
                 style={{
@@ -739,9 +739,8 @@ export default function InventoryTransfer() {
             </Modal>
 
             <Modal
-                title={`สแกนคิวอาร์โค้ด / บาร์โค้ด (${
-                    scanTarget === "fromLocation" || scanTarget === "toLocation" ? "ตำแหน่งสินค้า" : "พาเลท"
-                })`}
+                title={`สแกนคิวอาร์โค้ด / บาร์โค้ด (${scanTarget === "fromLocation" || scanTarget === "toLocation" ? "ตำแหน่งสินค้า" : "พาเลท"
+                    })`}
                 open={scannerOpen}
                 onCancel={() => setScannerOpen(false)}
                 footer={null}
@@ -765,6 +764,6 @@ export default function InventoryTransfer() {
                     </div>
                 </div>
             </Modal>
-        </Card>
+        </div>
     );
 }

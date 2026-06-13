@@ -32,7 +32,8 @@ const forceLogout = () => {
     const loginPath = `${basePath}/login`;
 
     if (window.location.pathname !== loginPath) {
-        window.location.assign(loginPath);
+        const currentPath = window.location.pathname + window.location.search;
+        window.location.assign(`${loginPath}?path=${encodeURIComponent(currentPath)}`);
     }
 };
 

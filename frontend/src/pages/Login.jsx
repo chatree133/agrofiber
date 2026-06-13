@@ -1,25 +1,30 @@
 import { LockOutlined, UserOutlined } from '@ant-design/icons';
 import { Button, Card, Form, Input, message } from 'antd';
 import { useState } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 
 export default function Login() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { token, login } = useAuth();
   const [loading, setLoading] = useState(false);
   const [form] = Form.useForm();
 
-  if (token) return <Navigate to="/dashboard" replace />;
+  const pathParam = searchParams.get('path');
+
+  if (token) return <Navigate to={pathParam || "/dashboard"} replace />;
 
   const onFinish = async (values) => {
     setLoading(true);
     try {
       const user =  await login(values.username, values.password);
       console.log('Logged in user:', user);
-      if (user.roles.includes('wms') && user.roles.length === 1) {
+      if (pathParam) {
+        navigate(pathParam);
+      } else if (user.roles.includes('wms') && user.roles.length === 1) {
         navigate('/wms/dashboard');
-      }else{
+      } else {
         navigate('/dashboard');
       }
     } catch (error) {

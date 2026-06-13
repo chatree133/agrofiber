@@ -16,6 +16,8 @@ import LabelPrintTemplate from './templates/LabelPrintTemplate';
 import GiDocumentTemplate from './templates/GiDocumentTemplate';
 import GrDocumentTemplate from './templates/GrDocumentTemplate';
 import { useDocument } from '../../context/DocumentContext';
+import { useWms } from '../../context/WmsContext';
+import LpPrintTemplate from './templates/LpPrintTemplate';
 
 export default function DocumentPrint() {
   const [searchParams] = useSearchParams();
@@ -35,6 +37,7 @@ export default function DocumentPrint() {
     getSalesInvoices,
     getCustomerPayments
   } = useDocument();
+  const { getLoadPlansPrintData } = useWms();
 
   const [loading, setLoading] = useState(true);
   const [docData, setDocData] = useState(null);
@@ -44,15 +47,20 @@ export default function DocumentPrint() {
   // Helper to determine document title in print metadata
   const getDocTitleForPrint = () => {
     if (!docData) return 'document';
-    
+
     if (formType === 'COMBINED') {
       const doNo = docData.doData?.DocumentNo || docData.doData?.documentNo || '';
       return `ชุดเอกสารส่งมอบและรับเงิน_${doNo}`;
     }
 
+    if (formType === 'LP') {
+      const dateParam = searchParams.get('date') || '';
+      return `แผนการส่งสินค้า_${dateParam}`;
+    }
+
     const docNoRaw = docData.DocumentNo || docData.documentNo || docData.PaymentNo || docData.paymentNo || '';
     const docNo = formType === 'CPO' ? docNoRaw.replace(/^QT(\d*)-/, 'PO-C$1-') : docNoRaw;
-    
+
     let prefix = 'เอกสาร';
     if (formType === 'QT') prefix = 'ใบเสนอราคา';
     else if (formType === 'SO') prefix = 'ใบสั่งขาย';
@@ -61,7 +69,8 @@ export default function DocumentPrint() {
     else if (formType === 'INV') prefix = 'ใบกำกับภาษี';
     else if (formType === 'RCPT') prefix = 'ใบเสร็จรับเงิน';
     else if (formType === 'GR') prefix = 'ใบรับสินค้า';
-    
+    else if (formType === 'LP') prefix = 'แผนการส่งสินค้า';
+
     return `${prefix}_${docNo}`;
   };
 
@@ -72,7 +81,7 @@ export default function DocumentPrint() {
   });
 
   useEffect(() => {
-    if (!docId) {
+    if (!docId && formType !== 'LP') {
       setLoading(false);
       return;
     }
@@ -80,7 +89,10 @@ export default function DocumentPrint() {
     const loadData = async () => {
       try {
         let res = null;
-        if (formType === 'QT' || formType === 'CPO') {
+        if (formType === 'LP') {
+          const dateParam = searchParams.get('date');
+          res = await getLoadPlansPrintData(dateParam, docId);
+        } else if (formType === 'QT' || formType === 'CPO') {
           res = await getQuotationDetail(docId);
         } else if (formType === 'SO') {
           res = await getSalesOrderDetail(docId);
@@ -186,6 +198,8 @@ export default function DocumentPrint() {
         return <GrDocumentTemplate docData={docData} />;
       case 'COMBINED':
         return <CombinedBillingTemplate docData={docData} />;
+      case 'LP':
+        return <LpPrintTemplate docData={docData} />;
       default:
         return <Empty description="ไม่พบรูปแบบฟอร์มสำหรับพิมพ์" />;
     }

@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useAuth } from './context/AuthContext.jsx';
 import { AppProviders } from './context/AppProviders.jsx';
 import MainLayout from './components/MainLayout.jsx';
@@ -57,7 +57,11 @@ import Uom from './pages/master/Uom.jsx';
 
 function ProtectedRoute({ children }) {
   const { token } = useAuth();
-  if (!token) return <Navigate to="/login" replace />;
+  const location = useLocation();
+  if (!token) {
+    const currentPath = location.pathname + location.search;
+    return <Navigate to={`/login?path=${encodeURIComponent(currentPath)}`} replace />;
+  }
   return children;
 }
 

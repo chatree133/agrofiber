@@ -29,9 +29,9 @@ export default function TransportMaster() {
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingRecord, setEditingRecord] = useState(null);
-  const { lookups, fetchLookups } = useMasterData();  
+  const { lookups, fetchLookups } = useMasterData();
   const [form] = Form.useForm();
-  
+
   useEffect(() => {
     if (!lookups || Object.keys(lookups).length === 0) {
       fetchLookups();
@@ -96,6 +96,7 @@ export default function TransportMaster() {
             : null,
           isActive: Boolean(record.IsActive),
           branchId: record.BranchId || undefined,
+          defaultDriverId: record.DefaultDriverId || undefined,
         });
       } else {
         form.setFieldsValue({
@@ -136,6 +137,7 @@ export default function TransportMaster() {
           workingEnd: end ? end.format('HH:mm') : null,
           isActive: values.isActive,
           branchId: values.branchId || null,
+          defaultDriverId: values.defaultDriverId || null,
         };
 
         if (editingRecord) {
@@ -192,6 +194,12 @@ export default function TransportMaster() {
       title: 'สาขาประจำ',
       dataIndex: 'BranchName',
       key: 'BranchName',
+      render: (text) => text || '-',
+    },
+    {
+      title: 'คนขับประจำ',
+      dataIndex: 'DefaultDriverName',
+      key: 'DefaultDriverName',
       render: (text) => text || '-',
     },
     { title: 'ประเภทรถ', dataIndex: 'VehicleType', key: 'VehicleType' },
@@ -287,11 +295,13 @@ export default function TransportMaster() {
               label: 'ยานพาหนะ',
               children: (
                 <Table
+                  size='small'
                   rowKey="VehicleId"
                   columns={vehicleColumns}
                   dataSource={vehicles}
                   loading={loading}
                   pagination={{ pageSize: 10 }}
+                  scroll={{ x: "max-content" }}
                 />
               ),
             },
@@ -300,6 +310,7 @@ export default function TransportMaster() {
               label: 'คนขับ',
               children: (
                 <Table
+                  size='small'
                   rowKey="DriverId"
                   columns={driverColumns}
                   dataSource={drivers}
@@ -321,7 +332,7 @@ export default function TransportMaster() {
         okText="บันทึก"
         cancelText="ยกเลิก"
         width={activeTab === 'vehicles' ? 700 : 520}
-        // destroyOnClose
+      // destroyOnClose
       >
         <Form form={form} layout="vertical">
           {activeTab === 'vehicles' ? (
@@ -367,6 +378,21 @@ export default function TransportMaster() {
                   </Select>
                 </Form.Item>
               </Col>
+              <Col span={24}>
+                <Form.Item name="defaultDriverId" label="คนขับประจำรถ (Default Driver)">
+                  <Select
+                    placeholder="เลือกคนขับประจำรถ (ออปชั่น)"
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    style={{ width: '100%' }}
+                    options={drivers.map(d => ({
+                      value: d.DriverId,
+                      label: `${d.DriverName} (${d.Phone || 'ไม่มีเบอร์โทร'})`
+                    }))}
+                  />
+                </Form.Item>
+              </Col>
             </Row>
           ) : (
             <>
@@ -393,7 +419,7 @@ export default function TransportMaster() {
                   options={lookups?.provinces || []}
                   optionFilterProp="label"
                   placeholder="เลือกจังหวัดที่ถนัด"
-                  // allowClear
+                // allowClear
                 />
               </Form.Item>
             </>

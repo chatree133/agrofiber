@@ -15,6 +15,7 @@ export default function DriverPortal() {
   const [shipments, setShipments] = useState([]);
   const [loading, setLoading] = useState(false);
   const [activePlan, setActivePlan] = useState(null);
+  const [searchText, setSearchText] = useState('');
 
   // POD Modal state
   const [podModalVisible, setPodModalVisible] = useState(false);
@@ -279,7 +280,7 @@ export default function DriverPortal() {
                 size="small"
                 style={{
                   borderRadius: 12,
-                  marginBottom: 16,
+                  marginBottom: 12,
                   border: '1px solid #e2e8f0',
                   boxShadow: '0 1px 3px rgba(0,0,0,0.02)'
                 }}
@@ -296,8 +297,35 @@ export default function DriverPortal() {
               </Card>
             )}
 
+            {/* Search Filter Input */}
+            {activePlan && (
+              <div style={{ marginBottom: 16 }}>
+                <Input.Search
+                  placeholder="ค้นหาชื่อลูกค้า, รหัส, เบอร์โทร หรือเลขที่ DO..."
+                  allowClear
+                  value={searchText}
+                  onChange={(e) => setSearchText(e.target.value)}
+                  onSearch={(value) => setSearchText(value)}
+                  style={{
+                    borderRadius: 8,
+                    overflow: 'hidden',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.02)'
+                  }}
+                />
+              </div>
+            )}
+
             {/* Drops List */}
-            {activePlan && activePlan.lines.map((line, index) => (
+            {activePlan && activePlan.lines
+              .filter(line => {
+                const searchLower = searchText.toLowerCase().trim();
+                if (!searchLower) return true;
+                const matchName = line.customerName?.toLowerCase().includes(searchLower);
+                const matchCode = line.customerCode?.toLowerCase().includes(searchLower);
+                const matchDocNo = line.documentNo?.toLowerCase().includes(searchLower);
+                return matchName || matchCode || matchDocNo;
+              })
+              .map((line, index) => (
               <Card
                 key={line.loadPlanLineId}
                 bodyStyle={{ padding: 16 }}
@@ -344,7 +372,11 @@ export default function DriverPortal() {
                       icon={<CompassOutlined />}
                       size="small"
                       type="dashed"
-                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(line.shipToAddress)}`}
+                      href={
+                        line.latitude !== null && line.longitude !== null && line.latitude !== undefined && line.longitude !== undefined
+                          ? `https://www.google.com/maps/search/?api=1&query=${line.latitude},${line.longitude}`
+                          : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(line.shipToAddress)}`
+                      }
                       target="_blank"
                       style={{ fontSize: 12, borderRadius: 4 }}
                     >

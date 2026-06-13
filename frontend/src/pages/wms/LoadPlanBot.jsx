@@ -16,7 +16,7 @@ import {
 } from "antd";
 import {
     EnvironmentOutlined,
-    CarOutlined,
+    TruckOutlined,
     DatabaseOutlined,
     CheckCircleOutlined,
     PlayCircleOutlined,
@@ -98,7 +98,7 @@ export default function LoadPlanBot() {
                 const planPayload = {
                     planDate: date,
                     vehicleId: parseInt(route.vehicle_id, 10),
-                    driverId: null, // Driver can be null/optional as configured
+                    driverId: route.driver_id && !isNaN(parseInt(route.driver_id, 10)) ? parseInt(route.driver_id, 10) : null,
                     remarks: `แผนจัดส่งอัตโนมัติ AI (ระยะทาง ${(route.total_distance_meters / 1000).toFixed(1)} กม., ค่าใช้จ่าย ${route.total_cost.toFixed(2)} บาท)`,
                     deliveryOrderIds,
                     deliveryOrders,
@@ -110,12 +110,15 @@ export default function LoadPlanBot() {
 
             message.success("ยืนยันและเปิดใช้งานแผนเดินรถสำเร็จ!");
 
-            // Redirect opener parent window
-            if (window.opener && !window.opener.closed) {
-                window.opener.location.href = "/wms/load-plans";
-            }
-            // Close popup
-            window.close();
+            // Delay closing the popup so the user can read the success message
+            setTimeout(() => {
+                // Redirect opener parent window
+                if (window.opener && !window.opener.closed) {
+                    window.opener.location.href = "/wms/load-plans";
+                }
+                // Close popup
+                window.close();
+            }, 1500);
         } catch (err) {
             console.error("Failed to save load plans", err);
             message.error("ไม่สามารถสร้างแผนจัดส่งได้: " + (err.response?.data?.message || err.message));
@@ -212,7 +215,7 @@ export default function LoadPlanBot() {
                                     value={activeRoutes.length}
                                     suffix="คัน"
                                     valueStyle={{ fontSize: "22px", color: "#d97706", fontWeight: "800" }}
-                                    prefix={<CarOutlined style={{ marginRight: 6 }} />}
+                                    prefix={<TruckOutlined style={{ marginRight: 6 }} />}
                                 />
                             </Card>
                         </Col>
@@ -240,7 +243,7 @@ export default function LoadPlanBot() {
                                         title={
                                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                                                 <Space>
-                                                    <CarOutlined style={{ color: "#7c3aed" }} />
+                                                    <TruckOutlined style={{ color: "#7c3aed" }} />
                                                     <Text strong style={{ fontSize: "14px" }}>
                                                         รถคันที่ {route.vehicle_id} {route.licensePlate ? `[${route.licensePlate}] [${route.vehicleType ? route.vehicleType : ''}]` : ''}
                                                     </Text>

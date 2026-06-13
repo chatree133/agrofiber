@@ -162,7 +162,7 @@ export default function GoodsReceiptList() {
     ];
 
     return (
-        <Card className="shadow-sm border-slate-100" style={{ borderRadius: "8px" }}>
+        <div className="shadow-sm border-slate-100" style={{ borderRadius: "8px" }}>
             <div className="flex justify-between items-center mb-6" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
                 <div>
                     <h1 className="text-lg font-semibold text-slate-800">
@@ -247,6 +247,6 @@ export default function GoodsReceiptList() {
                     showSizeChanger: true,
                 }}
             />
-        </Card>
+        </div>
     );
 }

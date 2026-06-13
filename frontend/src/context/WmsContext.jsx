@@ -98,6 +98,20 @@ export function WmsProvider({ children }) {
     return res.data || [];
   };
 
+  const getLoadPlansPrintData = async (date, docId) => {
+    const params = { date };
+    if (docId) {
+      params.docId = docId;
+    }
+    const res = await ApiClient.get('/api/wms/load-plans/print-data', { headers: authHeaders, params });
+    return res.data;
+  };
+
+  const getGoogleMapsKey = async () => {
+    const res = await ApiClient.get('/api/wms/load-plans/google-maps-key', { headers: authHeaders });
+    return res.mapsKey || res.data?.mapsKey || '';
+  };
+
   const getLoadPlanDetail = async (planId) => {
     const res = await ApiClient.get(`/api/wms/load-plans/${planId}`, { headers: authHeaders });
     return res.data;
@@ -197,6 +211,8 @@ export function WmsProvider({ children }) {
     getWmsIncidents,
     resolveWmsIncident,
     getLoadPlans,
+    getLoadPlansPrintData,
+    getGoogleMapsKey,
     getLoadPlanDetail,
     updateLoadPlanStatus,
     getLoadPlanVehicles,

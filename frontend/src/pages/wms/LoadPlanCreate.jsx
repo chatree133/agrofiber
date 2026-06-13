@@ -162,6 +162,9 @@ export default function LoadPlanCreate() {
     const handleVehicleChange = (value) => {
         const v = vehicles.find((item) => item.VehicleId === value);
         setSelectedVehicle(v);
+        if (v && v.DefaultDriverId) {
+            form.setFieldsValue({ driverId: v.DefaultDriverId });
+        }
     };
 
     const handleOptimizeClick = () => {

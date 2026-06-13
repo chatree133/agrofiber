@@ -46,7 +46,7 @@ const router = Router();
 router.use(authenticate);
 
 const dispatcherRoles = allowRoles('admin', 'warehouse_manager', 'wms');
-const driverRoles = allowRoles('admin', 'driver', 'warehouse', 'wms');
+const driverRoles = allowRoles('admin', 'driver', 'warehouse', 'wms', 'shipping');
 
 function getUserId(req) {
   const raw = req.user?.sub;
@@ -96,9 +96,10 @@ router.get('/vehicles', dispatcherRoles, asyncHandler(async (req, res) => {
   const branchId = req.query.branchId ? parseInt(req.query.branchId, 10) : null;
 
   let query = `
-    SELECT v.VehicleId, v.LicensePlate, v.VehicleType, v.MaxWeightKg, v.MaxVolumeCbm, v.WorkingStart, v.WorkingEnd, v.IsActive, v.BranchId, b.BranchName, v.CostPerKm
+    SELECT v.VehicleId, v.LicensePlate, v.VehicleType, v.MaxWeightKg, v.MaxVolumeCbm, v.WorkingStart, v.WorkingEnd, v.IsActive, v.BranchId, b.BranchName, v.CostPerKm, v.DefaultDriverId, d.DriverName AS DefaultDriverName
     FROM dbo.Vehicles v
     LEFT JOIN dbo.Branches b ON b.BranchId = v.BranchId
+    LEFT JOIN dbo.Drivers d ON d.DriverId = v.DefaultDriverId
   `;
 
   const conditions = [];
@@ -149,6 +150,7 @@ router.post('/vehicles', dispatcherRoles, asyncHandler(async (req, res) => {
   const isActive = parseBoolean(req.body.isActive, true);
   const branchId = req.body.branchId ? parseInt(req.body.branchId, 10) : null;
   const costPerKm = req.body.costPerKm !== undefined && req.body.costPerKm !== null ? Number(req.body.costPerKm) : null;
+  const defaultDriverId = req.body.defaultDriverId ? parseInt(req.body.defaultDriverId, 10) : null;
 
   if (!licensePlate) return res.status(400).json({ message: 'licensePlate is required' });
   if (!vehicleType) return res.status(400).json({ message: 'vehicleType is required' });
@@ -178,9 +180,9 @@ router.post('/vehicles', dispatcherRoles, asyncHandler(async (req, res) => {
   if (exists.length) return res.status(409).json({ message: 'License plate already exists' });
 
   const rows = await mssqlQuery('DEFAULT', `
-    INSERT INTO dbo.Vehicles (LicensePlate, VehicleType, MaxWeightKg, MaxVolumeCbm, WorkingStart, WorkingEnd, IsActive, BranchId, CostPerKm)
-    OUTPUT inserted.VehicleId, inserted.LicensePlate, inserted.VehicleType, inserted.MaxWeightKg, inserted.MaxVolumeCbm, inserted.WorkingStart, inserted.WorkingEnd, inserted.IsActive, inserted.BranchId, inserted.CostPerKm
-    VALUES (@licensePlate, @vehicleType, @maxWeightKg, @maxVolumeCbm, @workingStart, @workingEnd, @isActive, @branchId, @costPerKm)
+    INSERT INTO dbo.Vehicles (LicensePlate, VehicleType, MaxWeightKg, MaxVolumeCbm, WorkingStart, WorkingEnd, IsActive, BranchId, CostPerKm, DefaultDriverId)
+    OUTPUT inserted.VehicleId, inserted.LicensePlate, inserted.VehicleType, inserted.MaxWeightKg, inserted.MaxVolumeCbm, inserted.WorkingStart, inserted.WorkingEnd, inserted.IsActive, inserted.BranchId, inserted.CostPerKm, inserted.DefaultDriverId
+    VALUES (@licensePlate, @vehicleType, @maxWeightKg, @maxVolumeCbm, @workingStart, @workingEnd, @isActive, @branchId, @costPerKm, @defaultDriverId)
   `, {
     inputs: {
       licensePlate: { type: sql.NVarChar(30), value: licensePlate },
@@ -192,6 +194,7 @@ router.post('/vehicles', dispatcherRoles, asyncHandler(async (req, res) => {
       isActive: { type: sql.Bit, value: isActive },
       branchId: { type: sql.Int, value: branchId },
       costPerKm: { type: sql.Decimal(18, 2), value: costPerKm },
+      defaultDriverId: { type: sql.Int, value: defaultDriverId },
     },
   });
 
@@ -215,6 +218,7 @@ router.put('/vehicles/:vehicleId', dispatcherRoles, asyncHandler(async (req, res
   const isActive = parseBoolean(req.body.isActive, true);
   const branchId = req.body.branchId ? parseInt(req.body.branchId, 10) : null;
   const costPerKm = req.body.costPerKm !== undefined && req.body.costPerKm !== null ? Number(req.body.costPerKm) : null;
+  const defaultDriverId = req.body.defaultDriverId ? parseInt(req.body.defaultDriverId, 10) : null;
 
   if (!licensePlate) return res.status(400).json({ message: 'licensePlate is required' });
   if (!vehicleType) return res.status(400).json({ message: 'vehicleType is required' });
@@ -254,8 +258,9 @@ router.put('/vehicles/:vehicleId', dispatcherRoles, asyncHandler(async (req, res
         WorkingEnd = @workingEnd,
         IsActive = @isActive,
         BranchId = @branchId,
-        CostPerKm = @costPerKm
-    OUTPUT inserted.VehicleId, inserted.LicensePlate, inserted.VehicleType, inserted.MaxWeightKg, inserted.MaxVolumeCbm, inserted.WorkingStart, inserted.WorkingEnd, inserted.IsActive, inserted.BranchId, inserted.CostPerKm
+        CostPerKm = @costPerKm,
+        DefaultDriverId = @defaultDriverId
+    OUTPUT inserted.VehicleId, inserted.LicensePlate, inserted.VehicleType, inserted.MaxWeightKg, inserted.MaxVolumeCbm, inserted.WorkingStart, inserted.WorkingEnd, inserted.IsActive, inserted.BranchId, inserted.CostPerKm, inserted.DefaultDriverId
     WHERE VehicleId = @vehicleId
   `, {
     inputs: {
@@ -269,11 +274,12 @@ router.put('/vehicles/:vehicleId', dispatcherRoles, asyncHandler(async (req, res
       isActive: { type: sql.Bit, value: isActive },
       branchId: { type: sql.Int, value: branchId },
       costPerKm: { type: sql.Decimal(18, 2), value: costPerKm },
+      defaultDriverId: { type: sql.Int, value: defaultDriverId },
     },
   });
 
   if (!rows.length) return res.status(404).json({ message: 'Vehicle not found' });
-  
+
   const formattedRow = {
     ...rows[0],
     WorkingStart: formatTime(rows[0].WorkingStart),
@@ -526,14 +532,14 @@ router.get('/bot-payload', dispatcherRoles, asyncHandler(async (req, res) => {
   };
 
   if (depot.lat === null || depot.lng === null) {
-    return res.status(400).json({ 
-      message: `สาขา "${depot.branchName}" ยังไม่ได้ระบุพิกัด Latitude หรือ Longitude ในระบบ กรุณาไปที่หน้าตั้งค่าบริษัทเพื่อระบุพิกัดก่อนเรียกใช้งาน AI` 
+    return res.status(400).json({
+      message: `สาขา "${depot.branchName}" ยังไม่ได้ระบุพิกัด Latitude หรือ Longitude ในระบบ กรุณาไปที่หน้าตั้งค่าบริษัทเพื่อระบุพิกัดก่อนเรียกใช้งาน AI`
     });
   }
 
   // 3. Get Vehicles matching branch (or unassigned/global ones)
   const vehiclesRes = await mssqlQuery('DEFAULT', `
-    SELECT v.VehicleId, v.LicensePlate, v.VehicleType, v.MaxWeightKg, v.MaxVolumeCbm, v.WorkingStart, v.WorkingEnd, v.CostPerKm
+    SELECT v.VehicleId, v.LicensePlate, v.VehicleType, v.MaxWeightKg, v.MaxVolumeCbm, v.WorkingStart, v.WorkingEnd, v.CostPerKm, v.DefaultDriverId
     FROM dbo.Vehicles v
     WHERE v.IsActive = 1
       AND (v.BranchId = @branchId OR v.BranchId IS NULL)
@@ -730,8 +736,8 @@ router.get('/bot-payload', dispatcherRoles, asyncHandler(async (req, res) => {
     optResult = await optResponse.json();
   } catch (err) {
     console.error('Optimizer service call failed:', err);
-    return res.status(502).json({ 
-      message: `ไม่สามารถเชื่อมต่อระบบประมวลผลจัดเส้นทาง (${optimizerUrl}) ได้: ${err.message}` 
+    return res.status(502).json({
+      message: `ไม่สามารถเชื่อมต่อระบบประมวลผลจัดเส้นทาง (${optimizerUrl}) ได้: ${err.message}`
     });
   }
 
@@ -771,6 +777,7 @@ router.get('/bot-payload', dispatcherRoles, asyncHandler(async (req, res) => {
       ...route,
       licensePlate: vInfo ? vInfo.LicensePlate : '',
       vehicleType: vInfo ? vInfo.VehicleType : '',
+      driver_id: vInfo ? vInfo.DefaultDriverId : null,
       route: augmentedStops
     };
   });
@@ -790,7 +797,7 @@ router.get('/bot-payload', dispatcherRoles, asyncHandler(async (req, res) => {
 async function generateLoadPlanNo(tx) {
   const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, ''); // YYYYMMDD
   const prefix = `LP-${todayStr}-`;
-  
+
   const req = new sql.Request(tx);
   req.input('prefix', sql.NVarChar(50), prefix + '%');
   const res = await req.query(`
@@ -840,10 +847,12 @@ router.post('/', dispatcherRoles, asyncHandler(async (req, res) => {
     const doRes = await doQueryReq.query(`
       SELECT
         dol.DeliveryOrderId,
-        ISNULL(SUM(COALESCE(NULLIF(i.WidthM * i.LengthM * (th.ThicknessMm / 1000.0) * 1350.0, 0), 1.5) * dol.Quantity), 0) AS LineWeight,
-        ISNULL(SUM(COALESCE(NULLIF(i.WidthM * i.LengthM * (th.ThicknessMm / 1000.0), 0), 0.002) * dol.Quantity), 0) AS LineVolume
+        ISNULL(SUM(COALESCE(NULLIF(iw.WidthM * il.LengthM * (th.ThicknessMm / 1000.0) * 1350.0, 0), 1.5) * dol.Quantity), 0) AS LineWeight,
+        ISNULL(SUM(COALESCE(NULLIF(iw.WidthM * il.LengthM * (th.ThicknessMm / 1000.0), 0), 0.002) * dol.Quantity), 0) AS LineVolume
       FROM dbo.DeliveryOrderLines dol
       JOIN dbo.Items i ON i.ItemId = dol.ItemId
+      JOIN dbo.ItemLengths il ON i.LengthId = il.LengthId
+      JOIN dbo.ItemWidths iw ON i.WidthId = iw.WidthId
       LEFT JOIN dbo.ItemThicknesses th ON th.ThicknessId = i.ThicknessId
       WHERE dol.DeliveryOrderId IN (${placeHolders})
       GROUP BY dol.DeliveryOrderId
@@ -881,7 +890,7 @@ router.post('/', dispatcherRoles, asyncHandler(async (req, res) => {
     // Insert lines with sequences and coordinates
     for (let idx = 0; idx < deliveryOrderIds.length; idx++) {
       const doId = deliveryOrderIds[idx];
-      
+
       const extraInfo = Array.isArray(deliveryOrders) ? deliveryOrders.find(item => item.deliveryOrderId === doId) : null;
       let lat = extraInfo ? extraInfo.lat : null;
       let lng = extraInfo ? extraInfo.lng : null;
@@ -943,53 +952,203 @@ router.post('/', dispatcherRoles, asyncHandler(async (req, res) => {
 
 // 5. Get all load plans
 router.get('/', dispatcherRoles, asyncHandler(async (req, res) => {
-  const rows = await mssqlQuery('DEFAULT', `
+  const { date, status, vehicleId } = req.query;
+
+  let query = `
     SELECT
       lp.LoadPlanId, lp.LoadPlanNo, lp.PlanDate, lp.Status, lp.BranchId, b.BranchName,
       lp.TotalWeightKg, lp.TotalVolumeCbm, lp.Remarks, lp.CreatedAt,
       v.LicensePlate, v.VehicleType, d.DriverName, u.DisplayName AS CreatedByName
     FROM dbo.WmsLoadPlans lp
     JOIN dbo.Vehicles v ON v.VehicleId = lp.VehicleId
-    JOIN dbo.Drivers d ON d.DriverId = lp.DriverId
+    LEFT JOIN dbo.Drivers d ON d.DriverId = lp.DriverId
     JOIN dbo.Users u ON u.UserId = lp.CreatedBy
     LEFT JOIN dbo.Branches b ON b.BranchId = lp.BranchId
-    ORDER BY lp.PlanDate DESC, lp.LoadPlanId DESC
+    WHERE 1=1
+  `;
+
+  const inputs = {};
+
+  if (date) {
+    query += ` AND lp.PlanDate = @date`;
+    inputs.date = { type: sql.Date, value: date };
+  }
+
+  if (status) {
+    query += ` AND lp.Status = @status`;
+    inputs.status = { type: sql.NVarChar(30), value: status };
+  }
+
+  if (vehicleId) {
+    query += ` AND lp.VehicleId = @vehicleId`;
+    inputs.vehicleId = { type: sql.Int, value: parseInt(vehicleId, 10) };
+  }
+
+  query += ` ORDER BY lp.PlanDate DESC, lp.LoadPlanId DESC`;
+
+  const rows = await mssqlQuery('DEFAULT', query, { inputs });
+
+  if (rows.length === 0) {
+    return res.json({ data: [] });
+  }
+
+  // Fetch all lines/stops for the returned load plans to support client-side searching by DO and customer
+  const planIds = rows.map(r => r.LoadPlanId).join(',');
+  const linesRows = await mssqlQuery('DEFAULT', `
+    SELECT lpl.LoadPlanId, do.DocumentNo, c.CustomerName
+    FROM dbo.WmsLoadPlanLines lpl
+    JOIN dbo.DeliveryOrders do ON do.DeliveryOrderId = lpl.DeliveryOrderId
+    JOIN dbo.Customers c ON c.CustomerId = do.CustomerId
+    WHERE lpl.LoadPlanId IN (${planIds})
   `);
 
-  res.json({
-    data: rows.map(r => ({
-      id: r.LoadPlanId,
-      loadPlanId: r.LoadPlanId,
-      loadPlanNo: r.LoadPlanNo,
-      planDate: r.PlanDate,
-      status: r.Status,
-      branchId: r.BranchId,
-      branchName: r.BranchName,
-      totalWeightKg: Number(r.TotalWeightKg),
-      totalVolumeCbm: Number(r.TotalVolumeCbm),
-      remarks: r.Remarks,
-      createdAt: r.CreatedAt,
-      licensePlate: r.LicensePlate,
-      vehicleType: r.VehicleType,
-      driverName: r.DriverName,
-      createdByName: r.CreatedByName,
-    }))
+  const planLinesMap = {};
+  linesRows.forEach(l => {
+    if (!planLinesMap[l.LoadPlanId]) {
+      planLinesMap[l.LoadPlanId] = { documentNos: [], customerNames: [] };
+    }
+    if (l.DocumentNo) planLinesMap[l.LoadPlanId].documentNos.push(l.DocumentNo);
+    if (l.CustomerName) planLinesMap[l.LoadPlanId].customerNames.push(l.CustomerName);
   });
+
+  res.json({
+    data: rows.map(r => {
+      const linesInfo = planLinesMap[r.LoadPlanId] || { documentNos: [], customerNames: [] };
+      return {
+        id: r.LoadPlanId,
+        loadPlanId: r.LoadPlanId,
+        loadPlanNo: r.LoadPlanNo,
+        planDate: r.PlanDate,
+        status: r.Status,
+        branchId: r.BranchId,
+        branchName: r.BranchName,
+        totalWeightKg: Number(r.TotalWeightKg),
+        totalVolumeCbm: Number(r.TotalVolumeCbm),
+        remarks: r.Remarks,
+        createdAt: r.CreatedAt,
+        licensePlate: r.LicensePlate,
+        vehicleType: r.VehicleType,
+        driverName: r.DriverName,
+        createdByName: r.CreatedByName,
+        documentNos: linesInfo.documentNos,
+        customerNames: linesInfo.customerNames,
+      };
+    })
+  });
+}));
+
+// Get load plans print details for a specific date (draft, ready, in_transit)
+router.get('/print-data', dispatcherRoles, asyncHandler(async (req, res) => {
+  const { date, docId } = req.query;
+  if (!date) {
+    return res.status(400).json({ message: 'date is required' });
+  }
+
+  let query = `
+    SELECT lp.LoadPlanId, lp.LoadPlanNo, lp.PlanDate, lp.Status, lp.Remarks,
+           v.LicensePlate, v.VehicleType, v.MaxWeightKg, v.MaxVolumeCbm,
+           d.DriverName, d.Phone
+    FROM dbo.WmsLoadPlans lp
+    JOIN dbo.Vehicles v ON v.VehicleId = lp.VehicleId
+    LEFT JOIN dbo.Drivers d ON d.DriverId = lp.DriverId
+    WHERE lp.PlanDate = @date
+      AND lp.Status IN ('draft', 'ready', 'in_transit')
+  `;
+
+  const inputs = { date: { type: sql.Date, value: date } };
+
+  if (docId) {
+    query += ` AND lp.LoadPlanId = @docId`;
+    inputs.docId = { type: sql.Int, value: parseInt(docId, 10) };
+  }
+
+  query += ` ORDER BY lp.LoadPlanId DESC`;
+
+  const lpRows = await mssqlQuery('DEFAULT', query, { inputs });
+
+  if (lpRows.length === 0) {
+    return res.json({ data: [] });
+  }
+
+  const planIds = lpRows.map(lp => lp.LoadPlanId).join(',');
+
+  const linesRows = await mssqlQuery('DEFAULT', `
+    SELECT
+      lpl.LoadPlanLineId, lpl.LoadPlanId, lpl.StopSequence, lpl.DeliveryStatus, lpl.Latitude, lpl.Longitude,
+      do.DeliveryOrderId, do.DocumentNo, do.ShipToAddress, do.DocumentDate,
+      c.CustomerName, c.CustomerCode,
+      ISNULL(SUM(COALESCE(NULLIF(iw.WidthM * il.LengthM * (th.ThicknessMm / 1000.0) * 1350.0, 0), 1.5) * dol.Quantity), 0) AS LineWeight,
+      ISNULL(SUM(COALESCE(NULLIF(iw.WidthM * il.LengthM * (th.ThicknessMm / 1000.0), 0), 0.002) * dol.Quantity), 0) AS LineVolume
+    FROM dbo.WmsLoadPlanLines lpl
+    JOIN dbo.DeliveryOrders do ON do.DeliveryOrderId = lpl.DeliveryOrderId
+    JOIN dbo.Customers c ON c.CustomerId = do.CustomerId
+    JOIN dbo.DeliveryOrderLines dol ON dol.DeliveryOrderId = do.DeliveryOrderId
+    JOIN dbo.Items i ON i.ItemId = dol.ItemId
+    JOIN dbo.ItemLengths il ON i.LengthId = il.LengthId
+    JOIN dbo.ItemWidths iw ON i.WidthId = iw.WidthId
+    LEFT JOIN dbo.ItemThicknesses th ON th.ThicknessId = i.ThicknessId
+    WHERE lpl.LoadPlanId IN (${planIds})
+    GROUP BY lpl.LoadPlanLineId, lpl.LoadPlanId, lpl.StopSequence, lpl.DeliveryStatus, lpl.Latitude, lpl.Longitude, do.DeliveryOrderId, do.DocumentNo, do.ShipToAddress, do.DocumentDate, c.CustomerName, c.CustomerCode
+    ORDER BY lpl.StopSequence ASC
+  `);
+
+  const result = lpRows.map(lp => ({
+    loadPlanId: lp.LoadPlanId,
+    loadPlanNo: lp.LoadPlanNo,
+    planDate: lp.PlanDate,
+    status: lp.Status,
+    remarks: lp.Remarks,
+    licensePlate: lp.LicensePlate,
+    vehicleType: lp.VehicleType,
+    maxWeightKg: Number(lp.MaxWeightKg),
+    maxVolumeCbm: Number(lp.MaxVolumeCbm),
+    driverName: lp.DriverName,
+    driverPhone: lp.Phone,
+    lines: linesRows
+      .filter(l => l.LoadPlanId === lp.LoadPlanId)
+      .map(l => ({
+        loadPlanLineId: l.LoadPlanLineId,
+        stopSequence: l.StopSequence,
+        deliveryStatus: l.DeliveryStatus,
+        deliveryOrderId: l.DeliveryOrderId,
+        documentNo: l.DocumentNo,
+        shipToAddress: l.ShipToAddress,
+        customerName: l.CustomerName,
+        customerCode: l.CustomerCode,
+        weightKg: Number(l.LineWeight),
+        volumeCbm: Number(l.LineVolume),
+        latitude: l.Latitude ? Number(l.Latitude) : null,
+        longitude: l.Longitude ? Number(l.Longitude) : null,
+      }))
+  }));
+
+  res.json({ data: result });
+}));
+
+
+// Get Google Maps API Key for frontend rendering
+router.get('/google-maps-key', dispatcherRoles, asyncHandler(async (req, res) => {
+  const keyRes = await mssqlQuery('DEFAULT', `
+    SELECT SettingValue FROM dbo.SystemSettings WHERE SettingKey = 'GOOGLE_MAPS_KEY'
+  `);
+  const mapsKey = keyRes.length > 0 ? keyRes[0].SettingValue : '';
+  res.json({ mapsKey });
 }));
 
 // 6. Get detail of a specific load plan
 router.get('/:id', dispatcherRoles, asyncHandler(async (req, res) => {
   const lpId = Number(req.params.id);
-  
+
   const headerRows = await mssqlQuery('DEFAULT', `
     SELECT
       lp.LoadPlanId, lp.LoadPlanNo, lp.PlanDate, lp.Status, lp.BranchId, b.BranchName,
+      b.Latitude AS BranchLatitude, b.Longitude AS BranchLongitude,
       lp.TotalWeightKg, lp.TotalVolumeCbm, lp.Remarks, lp.CreatedAt,
       v.VehicleId, v.LicensePlate, v.VehicleType, v.MaxWeightKg, v.MaxVolumeCbm, v.WorkingStart, v.WorkingEnd,
       d.DriverId, d.DriverName, d.Phone, u.DisplayName AS CreatedByName
     FROM dbo.WmsLoadPlans lp
     JOIN dbo.Vehicles v ON v.VehicleId = lp.VehicleId
-    JOIN dbo.Drivers d ON d.DriverId = lp.DriverId
+    LEFT JOIN dbo.Drivers d ON d.DriverId = lp.DriverId
     JOIN dbo.Users u ON u.UserId = lp.CreatedBy
     LEFT JOIN dbo.Branches b ON b.BranchId = lp.BranchId
     WHERE lp.LoadPlanId = @lpId
@@ -1004,13 +1163,15 @@ router.get('/:id', dispatcherRoles, asyncHandler(async (req, res) => {
       lpl.LoadPlanLineId, lpl.StopSequence, lpl.DeliveryStatus, lpl.Latitude, lpl.Longitude,
       do.DeliveryOrderId, do.DocumentNo, do.ShipToAddress, do.DocumentDate,
       c.CustomerName, c.CustomerCode,
-      ISNULL(SUM(COALESCE(NULLIF(i.WidthM * i.LengthM * (th.ThicknessMm / 1000.0) * 1350.0, 0), 1.5) * dol.Quantity), 0) AS LineWeight,
-      ISNULL(SUM(COALESCE(NULLIF(i.WidthM * i.LengthM * (th.ThicknessMm / 1000.0), 0), 0.002) * dol.Quantity), 0) AS LineVolume
+      ISNULL(SUM(COALESCE(NULLIF(iw.WidthM * il.LengthM * (th.ThicknessMm / 1000.0) * 1350.0, 0), 1.5) * dol.Quantity), 0) AS LineWeight,
+      ISNULL(SUM(COALESCE(NULLIF(iw.WidthM * il.LengthM * (th.ThicknessMm / 1000.0), 0), 0.002) * dol.Quantity), 0) AS LineVolume
     FROM dbo.WmsLoadPlanLines lpl
     JOIN dbo.DeliveryOrders do ON do.DeliveryOrderId = lpl.DeliveryOrderId
     JOIN dbo.Customers c ON c.CustomerId = do.CustomerId
     JOIN dbo.DeliveryOrderLines dol ON dol.DeliveryOrderId = do.DeliveryOrderId
     JOIN dbo.Items i ON i.ItemId = dol.ItemId
+    JOIN dbo.ItemLengths il ON i.LengthId = il.LengthId
+    JOIN dbo.ItemWidths iw ON i.WidthId = iw.WidthId
     LEFT JOIN dbo.ItemThicknesses th ON th.ThicknessId = i.ThicknessId
     WHERE lpl.LoadPlanId = @lpId
     GROUP BY lpl.LoadPlanLineId, lpl.StopSequence, lpl.DeliveryStatus, lpl.Latitude, lpl.Longitude, do.DeliveryOrderId, do.DocumentNo, do.ShipToAddress, do.DocumentDate, c.CustomerName, c.CustomerCode
@@ -1026,6 +1187,8 @@ router.get('/:id', dispatcherRoles, asyncHandler(async (req, res) => {
       status: headerRows[0].Status,
       branchId: headerRows[0].BranchId,
       branchName: headerRows[0].BranchName,
+      branchLatitude: headerRows[0].BranchLatitude ? Number(headerRows[0].BranchLatitude) : null,
+      branchLongitude: headerRows[0].BranchLongitude ? Number(headerRows[0].BranchLongitude) : null,
       totalWeightKg: Number(headerRows[0].TotalWeightKg),
       totalVolumeCbm: Number(headerRows[0].TotalVolumeCbm),
       remarks: headerRows[0].Remarks,
@@ -1079,7 +1242,7 @@ router.put('/:id/status', dispatcherRoles, asyncHandler(async (req, res) => {
     const updateReq = new sql.Request(tx);
     updateReq.input('lpId', sql.Int, lpId);
     updateReq.input('status', sql.NVarChar(30), status);
-    
+
     // Update LoadPlan Status
     await updateReq.query(`UPDATE dbo.WmsLoadPlans SET Status = @status WHERE LoadPlanId = @lpId`);
 
@@ -1141,19 +1304,21 @@ router.get('/drivers/me/today', driverRoles, asyncHandler(async (req, res) => {
   const planIds = lpRows.map(lp => lp.LoadPlanId).join(',');
   const linesRows = await mssqlQuery('DEFAULT', `
     SELECT
-      lpl.LoadPlanLineId, lpl.LoadPlanId, lpl.StopSequence, lpl.DeliveryStatus,
+      lpl.LoadPlanLineId, lpl.LoadPlanId, lpl.StopSequence, lpl.DeliveryStatus, lpl.Latitude, lpl.Longitude,
       do.DeliveryOrderId, do.DocumentNo, do.ShipToAddress, do.DocumentDate,
       c.CustomerName, c.CustomerCode,
-      ISNULL(SUM(COALESCE(NULLIF(i.WidthM * i.LengthM * (th.ThicknessMm / 1000.0) * 1350.0, 0), 1.5) * dol.Quantity), 0) AS LineWeight,
-      ISNULL(SUM(COALESCE(NULLIF(i.WidthM * i.LengthM * (th.ThicknessMm / 1000.0), 0), 0.002) * dol.Quantity), 0) AS LineVolume
+      ISNULL(SUM(COALESCE(NULLIF(iw.WidthM * il.LengthM * (th.ThicknessMm / 1000.0) * 1350.0, 0), 1.5) * dol.Quantity), 0) AS LineWeight,
+      ISNULL(SUM(COALESCE(NULLIF(iw.WidthM * il.LengthM * (th.ThicknessMm / 1000.0), 0), 0.002) * dol.Quantity), 0) AS LineVolume
     FROM dbo.WmsLoadPlanLines lpl
     JOIN dbo.DeliveryOrders do ON do.DeliveryOrderId = lpl.DeliveryOrderId
     JOIN dbo.Customers c ON c.CustomerId = do.CustomerId
     JOIN dbo.DeliveryOrderLines dol ON dol.DeliveryOrderId = do.DeliveryOrderId
     JOIN dbo.Items i ON i.ItemId = dol.ItemId
+    JOIN dbo.ItemLengths il ON i.LengthId = il.LengthId
+    JOIN dbo.ItemWidths iw ON i.WidthId = iw.WidthId
     LEFT JOIN dbo.ItemThicknesses th ON th.ThicknessId = i.ThicknessId
     WHERE lpl.LoadPlanId IN (${planIds})
-    GROUP BY lpl.LoadPlanLineId, lpl.LoadPlanId, lpl.StopSequence, lpl.DeliveryStatus, do.DeliveryOrderId, do.DocumentNo, do.ShipToAddress, do.DocumentDate, c.CustomerName, c.CustomerCode
+    GROUP BY lpl.LoadPlanLineId, lpl.LoadPlanId, lpl.StopSequence, lpl.DeliveryStatus, lpl.Latitude, lpl.Longitude, do.DeliveryOrderId, do.DocumentNo, do.ShipToAddress, do.DocumentDate, c.CustomerName, c.CustomerCode
     ORDER BY lpl.StopSequence ASC
   `);
 
@@ -1178,6 +1343,8 @@ router.get('/drivers/me/today', driverRoles, asyncHandler(async (req, res) => {
         customerCode: l.CustomerCode,
         weightKg: Number(l.LineWeight),
         volumeCbm: Number(l.LineVolume),
+        latitude: l.Latitude ? Number(l.Latitude) : null,
+        longitude: l.Longitude ? Number(l.Longitude) : null,
       }))
   }));
 
@@ -1188,7 +1355,7 @@ router.get('/drivers/me/today', driverRoles, asyncHandler(async (req, res) => {
 async function generatePodNo(tx) {
   const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, ''); // YYYYMMDD
   const prefix = `POD-${todayStr}-`;
-  
+
   const req = new sql.Request(tx);
   req.input('prefix', sql.NVarChar(50), prefix + '%');
   const res = await req.query(`
@@ -1262,15 +1429,15 @@ router.post('/lines/:lineId/pod', driverRoles, upload.single('photo'), asyncHand
       FROM dbo.DeliveryOrders 
       WHERE DeliveryOrderId = @doId
     `);
-    
+
     if (doInfoRes.recordset.length > 0) {
       const { CustomerId, ShipToAddress } = doInfoRes.recordset[0];
-      
+
       if (latitude !== null && longitude !== null && !isNaN(latitude) && !isNaN(longitude)) {
         const addrReq = new sql.Request(tx);
         addrReq.input('customerId', sql.Int, CustomerId);
         addrReq.input('shipToAddress', sql.NVarChar(1000), ShipToAddress || '');
-        
+
         // Find best match address
         const bestAddrRes = await addrReq.query(`
           SELECT TOP 1 CustomerAddressId
@@ -1282,7 +1449,7 @@ router.post('/lines/:lineId/pod', driverRoles, upload.single('photo'), asyncHand
             )
           ORDER BY IsDefault DESC, CustomerAddressId ASC
         `);
-        
+
         let targetAddressId = null;
         if (bestAddrRes.recordset.length > 0) {
           targetAddressId = bestAddrRes.recordset[0].CustomerAddressId;
@@ -1298,7 +1465,7 @@ router.post('/lines/:lineId/pod', driverRoles, upload.single('photo'), asyncHand
             targetAddressId = fallbackRes.recordset[0].CustomerAddressId;
           }
         }
-        
+
         if (targetAddressId) {
           const updateAddrReq = new sql.Request(tx);
           updateAddrReq.input('addressId', sql.Int, targetAddressId);
